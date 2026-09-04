@@ -1,0 +1,41 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ShadeGraph — Id helpers
+// ───────────────────────────────────────────────────────────────────────────
+// Pure data. Ids must be stable, JSON-safe, and readable in a serialised doc
+// so a human can diff two saved graphs. Node ids embed the type slug; edge ids
+// are DERIVED from their endpoints, which makes duplicate-edge detection a
+// string comparison and keeps round-trips byte-stable.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import type { Edge } from './document';
+
+/** Short, collision-resistant-enough suffix for editor-scoped ids. */
+function suffix(): string {
+  return Math.random().toString(36).slice(2, 8);
+}
+
+/** "math.mix" → "math_mix". Keeps ids readable and selector-safe. */
+export function slugifyType(type: string): string {
+  return type.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'node';
+}
+
+/** Unique id for a new node of `type`, e.g. `math_mix_k3f9a1`. */
+export function makeNodeId(type: string): string {
+  return `${slugifyType(type)}_${suffix()}`;
+}
+
+/** Unique id for a new layer. */
+export function makeLayerId(): string {
+  return `layer_${suffix()}`;
+}
+
+/** Unique id for a new document. */
+export function makeDocumentId(): string {
+  return `doc_${suffix()}`;
+}
+
+/** Deterministic edge id from its endpoints — two identical links always
+ *  produce the same id, so duplicates collapse instead of stacking. */
+export function makeEdgeId(source: Edge['source'], target: Edge['target']): string {
+  return `${source.node}:${source.socket}->${target.node}:${target.socket}`;
+}
