@@ -32,6 +32,8 @@ version — and it's built to scale to any WebGPU shader work, not one hero.
 - **`src/adapters/legion/`** — imports Legion's GLSL chunks + lab-store; exports
   back. See its README.
 
+Agents: read [AGENTS.md](AGENTS.md) before editing.
+
 ## Design plan & project state
 
 Full design/research doc and continuity baton live in the workspace vault:
