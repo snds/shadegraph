@@ -1,41 +1,271 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// ShadeGraph — Layer stack  ·  PLACEHOLDER
+// ShadeGraph — Layer stack
 // ───────────────────────────────────────────────────────────────────────────
-// Owned by the "Layer stack panel" task. Fill THIS file in; `App.tsx` already
-// mounts it and must not be edited.
+// The Photoshop-like surface: an ordered stack of layers, each owning its own
+// node graph. This pane picks WHICH graph the canvas edits (`setActiveLayer`)
+// and how each layer composites (blend / opacity / enabled / visible / solo).
+// It never touches nodes or edges — that is the graph surface's job, and the
+// two surfaces stay deliberately separate.
 //
-// Contract (do not change, or App.tsx breaks):
-//   • props-free — read everything from `useEditorStore` directly
-//   • renders exactly one root element: the whole <aside className="sg-layers">
-//     (it is grid column 1 of `.sg-body`)
-//   • named export `LayerStack`
+// Contract with `App.tsx` (unchanged from the placeholder): props-free, one
+// root element `<aside className="sg-layers">`, named export `LayerStack`.
 //
-// To do here: add / remove / reorder layers, blend mode, opacity, enabled +
-// visible + solo toggles — all via `addLayer`, `removeLayer`, `setLayerProp`,
-// `setActiveLayer`. Below is a read-only stand-in so the shell renders.
+// Order: `layerStack.layers` is BOTTOM-TO-TOP; this list renders TOP-FIRST.
+// That inversion lives entirely in `./reorder`, never inline here.
+//
+// Rejections (deleting the last layer, unknown ids) are surfaced by the store's
+// `lastError` → `NoticeToast` channel, so nothing here invents its own errors.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { useCallback } from 'react';
+
+import type { ShaderLayer } from '../../model/document';
 import { activeLayerId, useEditorStore } from '../store';
+import { BLEND_MODES, BLEND_MODE_LABELS, isBlendMode } from './blendModes';
+import { canMoveLayer, reorderedDocument, topFirst, type StackDirection } from './reorder';
+import './layers.css';
+
+/** Percent, for display and for the opacity slider. */
+const pct = (opacity: number) => Math.round(opacity * 100);
 
 export function LayerStack() {
   const layers = useEditorStore((s) => s.doc.layerStack.layers);
   const activeId = useEditorStore((s) => activeLayerId(s.doc));
+  const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
+  const setLayerProp = useEditorStore((s) => s.setLayerProp);
+  const addLayer = useEditorStore((s) => s.addLayer);
+  const removeLayer = useEditorStore((s) => s.removeLayer);
+  const loadDocument = useEditorStore((s) => s.loadDocument);
+
+  // When any layer is soloed, only soloed layers composite — so the panel must
+  // show the other rows as inert, or the enabled toggles look like they lie.
+  const soloing = layers.some((l) => l.soloed);
+
+  const move = useCallback(
+    (id: string, direction: StackDirection) => {
+      // TEMPORARY: no `reorderLayer` action exists on the store yet and this
+      // task may not edit `store.ts`, so the reordered document goes through
+      // `loadDocument`. That action clears the node selection as a side effect
+      // (it is meant for opening files), so the selection is restored right
+      // after — reordering layers must not deselect what you were inspecting.
+      // Replace this whole block with `reorderLayer(id, direction)` once it
+      // exists.
+      const { doc, selectedNodeIds, selectNodes } = useEditorStore.getState();
+      const next = reorderedDocument(doc, id, direction);
+      if (!next) return;
+      loadDocument(next);
+      if (selectedNodeIds.length > 0) selectNodes(selectedNodeIds);
+    },
+    [loadDocument],
+  );
 
   return (
     <aside className="sg-layers" aria-label="Layer stack">
-      <h2 className="sg-pane__title">Layers</h2>
+      <header className="sg-layers__head">
+        <h2 className="sg-pane__title">Layers</h2>
+        <button
+          type="button"
+          className="sg-btn sg-btn--mini"
+          onClick={() => addLayer()}
+          title="Add a layer above the stack"
+        >
+          + Layer
+        </button>
+      </header>
+
       <ul className="sg-layers__list">
-        {/* Array order is bottom-to-top; show the stack the way it composites. */}
-        {[...layers].reverse().map((layer) => (
-          <li key={layer.id} className="sg-layers__item" data-active={layer.id === activeId}>
-            <span className="sg-layers__name">{layer.name}</span>
-            <span className="sg-layers__meta">
-              {layer.blend} · {Math.round(layer.opacity * 100)}%
-            </span>
-          </li>
+        {topFirst(layers).map((layer) => (
+          <LayerRow
+            key={layer.id}
+            layer={layer}
+            active={layer.id === activeId}
+            dimmed={soloing && !layer.soloed}
+            canMoveUp={canMoveLayer(layers, layer.id, 'up')}
+            canMoveDown={canMoveLayer(layers, layer.id, 'down')}
+            onlyLayer={layers.length <= 1}
+            onActivate={setActiveLayer}
+            onPatch={setLayerProp}
+            onMove={move}
+            onRemove={removeLayer}
+          />
         ))}
       </ul>
-      <p className="sg-pane__pending">layer editing — pending</p>
+
+      <p className="sg-layers__legend">
+        Top of the stack composites last. <b>out</b> = in the compiled output,{' '}
+        <b>prev</b> = drawn in the editor preview, <b>solo</b> = only soloed layers composite.
+      </p>
     </aside>
+  );
+}
+
+// ── One row ────────────────────────────────────────────────────────────────
+
+interface LayerRowProps {
+  layer: ShaderLayer;
+  active: boolean;
+  dimmed: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onlyLayer: boolean;
+  onActivate: (id: string) => void;
+  onPatch: (id: string, patch: Partial<Omit<ShaderLayer, 'id' | 'graph'>>) => void;
+  onMove: (id: string, direction: StackDirection) => void;
+  onRemove: (id: string) => void;
+}
+
+function LayerRow({
+  layer,
+  active,
+  dimmed,
+  canMoveUp,
+  canMoveDown,
+  onlyLayer,
+  onActivate,
+  onPatch,
+  onMove,
+  onRemove,
+}: LayerRowProps) {
+  const nodeCount = layer.graph.nodes.length;
+
+  return (
+    <li
+      className="sg-layers__item"
+      data-active={active}
+      data-dimmed={dimmed || undefined}
+      data-disabled={!layer.enabled || undefined}
+    >
+      <div className="sg-layers__row">
+        {/* The row header doubles as the "edit this layer's graph" control. */}
+        <button
+          type="button"
+          className="sg-layers__name"
+          onClick={() => onActivate(layer.id)}
+          aria-pressed={active}
+          title={`Edit ${layer.name}'s graph`}
+        >
+          <span className="sg-layers__label">{layer.name}</span>
+          <span className="sg-layers__count">{nodeCount}</span>
+        </button>
+
+        <div className="sg-layers__moves">
+          <button
+            type="button"
+            className="sg-layers__move"
+            onClick={() => onMove(layer.id, 'up')}
+            disabled={!canMoveUp}
+            aria-label={`Move ${layer.name} up`}
+            title="Move up (composites later)"
+          >
+            ▲
+          </button>
+          <button
+            type="button"
+            className="sg-layers__move"
+            onClick={() => onMove(layer.id, 'down')}
+            disabled={!canMoveDown}
+            aria-label={`Move ${layer.name} down`}
+            title="Move down (composites earlier)"
+          >
+            ▼
+          </button>
+        </div>
+      </div>
+
+      <div className="sg-layers__row sg-layers__row--toggles">
+        <Toggle
+          label="out"
+          on={layer.enabled}
+          title="Contributes to the compiled output"
+          name={layer.name}
+          onToggle={() => onPatch(layer.id, { enabled: !layer.enabled })}
+        />
+        <Toggle
+          label="prev"
+          on={layer.visible}
+          title="Drawn in the editor preview, even when not in the output"
+          name={layer.name}
+          onToggle={() => onPatch(layer.id, { visible: !layer.visible })}
+        />
+        <Toggle
+          label="solo"
+          on={layer.soloed ?? false}
+          title="Solo: while any layer is soloed, only soloed layers composite"
+          name={layer.name}
+          onToggle={() => onPatch(layer.id, { soloed: !layer.soloed })}
+        />
+        <button
+          type="button"
+          className="sg-layers__remove"
+          onClick={() => onRemove(layer.id)}
+          disabled={onlyLayer}
+          aria-label={`Delete ${layer.name}`}
+          title={onlyLayer ? 'A document needs at least one layer' : 'Delete this layer'}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div className="sg-layers__row sg-layers__row--mix">
+        <label className="sg-layers__field">
+          <span className="sg-layers__fieldLabel">Blend</span>
+          <select
+            className="sg-layers__select"
+            value={layer.blend}
+            onChange={(e) => {
+              if (isBlendMode(e.target.value)) onPatch(layer.id, { blend: e.target.value });
+            }}
+            aria-label={`Blend mode for ${layer.name}`}
+          >
+            {BLEND_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {BLEND_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="sg-layers__field sg-layers__field--opacity">
+          <span className="sg-layers__fieldLabel">Opacity</span>
+          <input
+            className="sg-layers__slider"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={pct(layer.opacity)}
+            onChange={(e) => onPatch(layer.id, { opacity: Number(e.target.value) / 100 })}
+            aria-label={`Opacity for ${layer.name}`}
+          />
+          <output className="sg-layers__pct">{pct(layer.opacity)}%</output>
+        </label>
+      </div>
+    </li>
+  );
+}
+
+// ── Small pressed-state toggle ─────────────────────────────────────────────
+
+interface ToggleProps {
+  label: string;
+  name: string;
+  title: string;
+  on: boolean;
+  onToggle: () => void;
+}
+
+function Toggle({ label, name, title, on, onToggle }: ToggleProps) {
+  return (
+    <button
+      type="button"
+      className="sg-layers__toggle"
+      data-on={on}
+      aria-pressed={on}
+      aria-label={`${title} — ${name}`}
+      title={title}
+      onClick={onToggle}
+    >
+      {label}
+    </button>
   );
 }

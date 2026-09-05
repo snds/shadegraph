@@ -1,0 +1,95 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — Layer stack pane
+   Imported by `LayerStack.tsx`, not by the shared shell sheet: this pane owns
+   its own styles so the layer, inspector and graph tasks never share a file.
+   Baseline `.sg-layers`, `.sg-layers__list` and `.sg-layers__item` rules live
+   in `../app.css`; everything below extends them and only uses shell tokens.
+   The pane is a narrow 220px column, so rows stack rather than sprawl.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-layers__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+/* The shared `.sg-pane__title` carries its own bottom margin; inside the flex
+   header that would misalign the button, so it is cleared here. */
+.sg-layers__head .sg-pane__title { margin-bottom: 0; }
+
+.sg-btn--mini { padding: 2px 7px; font-size: 11px; line-height: 1.5; }
+
+.sg-layers__list { margin-top: 8px; }
+
+/* `.sg-layers__item` (padding, border, radius, active border) comes from the
+   shell sheet; only the extra states and inner layout are set here. */
+.sg-layers__item { gap: 6px; }
+.sg-layers__item[data-active='true'] { background: var(--sg-node-head); }
+/* Not in the composite: readable, but clearly inert. */
+.sg-layers__item[data-disabled] .sg-layers__label { text-decoration: line-through; }
+.sg-layers__item[data-disabled] { opacity: 0.72; }
+/* Another layer is soloed, so this one is not compositing regardless. */
+.sg-layers__item[data-dimmed] { opacity: 0.45; }
+
+.sg-layers__row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sg-layers__row--toggles { gap: 4px; }
+.sg-layers__row--mix { display: grid; gap: 4px; }
+
+/* ── Name (also the "edit this graph" button) ─────────────────────────────── */
+.sg-layers__name {
+  flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px;
+  font: inherit; text-align: left; color: var(--sg-text);
+  background: transparent; border: 0; padding: 0; cursor: pointer;
+}
+.sg-layers__name:hover .sg-layers__label { color: #fff; }
+.sg-layers__name[aria-pressed='true'] .sg-layers__label { color: var(--sg-accent); font-weight: 600; }
+.sg-layers__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-layers__count { flex: none; color: var(--sg-dim); font-size: 10px; }
+.sg-layers__count::after { content: ' nodes'; }
+
+/* ── Reorder ─────────────────────────────────────────────────────────────── */
+.sg-layers__moves { flex: none; display: flex; gap: 2px; }
+.sg-layers__move {
+  font: inherit; font-size: 9px; line-height: 1; color: var(--sg-dim);
+  background: transparent; border: 1px solid var(--sg-line); border-radius: 4px;
+  padding: 3px 4px; cursor: pointer;
+}
+.sg-layers__move:hover:not(:disabled) { color: var(--sg-text); border-color: var(--sg-accent); }
+.sg-layers__move:disabled { opacity: 0.3; cursor: default; }
+
+/* ── Toggles ─────────────────────────────────────────────────────────────── */
+.sg-layers__toggle {
+  font: inherit; font-size: 10px; letter-spacing: 0.04em; line-height: 1;
+  color: var(--sg-dim); background: transparent;
+  border: 1px solid var(--sg-line); border-radius: 4px;
+  padding: 3px 5px; cursor: pointer;
+}
+.sg-layers__toggle:hover { color: var(--sg-text); }
+.sg-layers__toggle[data-on='true'] { color: #06121f; background: var(--sg-accent); border-color: var(--sg-accent); }
+
+.sg-layers__remove {
+  margin-left: auto; font: inherit; font-size: 11px; line-height: 1;
+  color: var(--sg-dim); background: transparent; border: 0; padding: 3px 2px; cursor: pointer;
+}
+.sg-layers__remove:hover:not(:disabled) { color: var(--sg-danger); }
+.sg-layers__remove:disabled { opacity: 0.3; cursor: default; }
+
+/* ── Blend + opacity ─────────────────────────────────────────────────────── */
+.sg-layers__field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sg-layers__fieldLabel { flex: none; width: 44px; color: var(--sg-dim); font-size: 10px; }
+
+.sg-layers__select {
+  flex: 1; min-width: 0; font: inherit; font-size: 11px; color: var(--sg-text);
+  background: var(--sg-panel); border: 1px solid var(--sg-line);
+  border-radius: 4px; padding: 2px 4px;
+}
+.sg-layers__select:focus-visible { outline: 1px solid var(--sg-accent); }
+
+.sg-layers__slider { flex: 1; min-width: 0; accent-color: var(--sg-accent); height: 14px; }
+.sg-layers__pct {
+  flex: none; width: 34px; text-align: right;
+  color: var(--sg-dim); font-size: 10px; font-variant-numeric: tabular-nums;
+}
+
+/* ── Footer key ──────────────────────────────────────────────────────────── */
+.sg-layers__legend {
+  margin: 12px 0 0; color: var(--sg-dim); font-size: 10px; line-height: 1.45; opacity: 0.8;
+}
+.sg-layers__legend b { color: var(--sg-text); font-weight: 600; }
