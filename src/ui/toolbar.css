@@ -1,0 +1,65 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — document toolbar
+   Owned by DocToolbar.tsx and imported from it. `app.css` keeps the shared
+   vocabulary (.sg-topbar, .sg-hint, .sg-btn, the colour tokens); everything
+   below is toolbar-specific and references those tokens, never raw hex.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* The name field reads as text until you touch it — a document title, not a
+   form input sitting in the chrome. */
+.sg-doc-name {
+  font: inherit;
+  color: var(--sg-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--sg-radius);
+  padding: 2px 6px;
+  min-width: 8ch;
+  width: 22ch;
+  max-width: 40ch;
+}
+.sg-doc-name:hover { border-color: var(--sg-line); }
+.sg-doc-name:focus {
+  outline: none;
+  border-color: var(--sg-accent);
+  background: var(--sg-raised);
+}
+
+/* Actions sit hard right; `baseline` alignment on .sg-topbar would otherwise
+   hang the buttons off the logo's baseline. */
+.sg-toolbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sg-status { font-style: italic; }
+
+/* The autosave restore affordance: says where the open document came from and
+   offers the way back out of it. */
+.sg-restored {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--sg-dim);
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius);
+  padding: 2px 8px;
+  background: var(--sg-raised);
+}
+
+.sg-linkbtn {
+  font: inherit;
+  color: var(--sg-accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.sg-linkbtn:hover { color: #fff; }
+
+/* The real file picker is driven by the Load button. */
+.sg-file-input { display: none; }
