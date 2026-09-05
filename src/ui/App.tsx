@@ -1,33 +1,50 @@
-// ShadeGraph — application shell.
+// ═══════════════════════════════════════════════════════════════════════════
+// ShadeGraph — application shell
+// ───────────────────────────────────────────────────────────────────────────
+//   ┌──────────────────────── DocToolbar ────────────────────────┐
+//   ├─────────────┬───────────────────────────────┬──────────────┤
+//   │ LayerStack  │        GraphCanvas             │  Inspector   │
+//   │ (Photoshop) │  React Flow · typed sockets    │  params of   │
+//   │             │  · reserved thumbnail area     │  selection   │
+//   ├─────────────┴───────────────────────────────┴──────────────┤
+//   │                    Main viewer (Phase 2)                    │
+//   └─────────────────────────────────────────────────────────────┘
 //
-// Layout (see docs/DESIGN-PLAN.md → "UI surfaces"):
+// This file is a MOUNT POINT ONLY and is deliberately dumb. Each pane is a
+// props-free component that reads `useEditorStore` itself, so the inspector,
+// layer-stack and toolbar tasks each edit exactly one file and never this one.
+// Adding logic here re-couples panes that are meant to stay independent.
 //
-//   ┌─────────────┬───────────────────────────────┬──────────────┐
-//   │ Layer Stack │        Node Graph (canvas)     │  Inspector   │
-//   │ (Photoshop) │  React Flow · typed sockets ·  │  params of   │
-//   │ add/remove  │  per-node live thumbnails      │  selection + │
-//   │ blend/opac  │                                │  blackboard  │
-//   │ eye/solo    ├───────────────────────────────┤              │
-//   │ reorder     │        Main Viewer             │  Backend:    │
-//   │             │  composite · solo node/layer   │  glsl / wgsl │
-//   └─────────────┴───────────────────────────────┴──────────────┘
-//
-// This file is the scaffold seam: it wires the panes to the store + preview
-// scheduler. Panes below are placeholders until Phase 2 (see the plan).
+// The main viewer stays an empty reserved strip: Phase 1 ships no rendering,
+// and a fake preview would misrepresent the tool's core promise (previews run
+// the real target program).
+
+import { registerStarterNodes } from '../nodes/definitions';
+import { DocToolbar } from './DocToolbar';
+import { GraphCanvas } from './graph/GraphCanvas';
+import { Inspector } from './inspector/Inspector';
+import { LayerStack } from './layers/LayerStack';
+import { NoticeToast } from './NoticeToast';
+import { bridgeStoreErrors } from './notice';
+
+// Boot-time wiring, once per module load. `addNode` resolves types through the
+// registry, so nothing can be created until the starter set is registered.
+registerStarterNodes();
+bridgeStoreErrors();
 
 export function App() {
   return (
     <div className="sg-app">
-      <header className="sg-topbar">
-        <span className="sg-logo">ShadeGraph</span>
-        <span className="sg-hint">scaffold — see 07-projects/21-shadegraph/docs/DESIGN-PLAN.md</span>
-      </header>
+      <DocToolbar />
       <main className="sg-body">
-        <aside className="sg-layers" aria-label="Layer stack">Layer Stack</aside>
-        <section className="sg-graph" aria-label="Node graph">Node Graph</section>
-        <aside className="sg-inspector" aria-label="Inspector">Inspector</aside>
+        <LayerStack />
+        <GraphCanvas />
+        <Inspector />
       </main>
-      <footer className="sg-viewer" aria-label="Main viewer">Main Viewer</footer>
+      <footer className="sg-viewer" aria-label="Main viewer">
+        <span>main viewer · Phase 2</span>
+      </footer>
+      <NoticeToast />
     </div>
   );
 }

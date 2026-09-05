@@ -1,3 +1,10 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — editor shell styles
+   Dark tokens below are the shared vocabulary; panes reference them, never raw
+   hex. Socket colours are the one exception: they live in `graph/socketStyle.ts`
+   because JS (handles, edges, legend) and CSS must agree on them.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 :root {
   color-scheme: dark;
   --sg-bg: #0e1013;
@@ -6,26 +13,209 @@
   --sg-text: #d7dce3;
   --sg-dim: #7c8798;
   --sg-accent: #4ea1ff;
+  /* Added for the graph surface; same family as the tokens above. */
+  --sg-node: #1b1f26;
+  --sg-node-head: #232833;
+  --sg-raised: #1f242c;
+  --sg-danger: #ff6b6b;
+  --sg-ok: #57d9a3;
+  --sg-radius: 6px;
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui, sans-serif; }
 
 .sg-app { display: flex; flex-direction: column; height: 100%; }
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
 .sg-topbar {
   display: flex; align-items: baseline; gap: 12px;
   padding: 8px 12px; border-bottom: 1px solid var(--sg-line); background: var(--sg-panel);
 }
 .sg-logo { font-weight: 600; letter-spacing: 0.02em; }
+.sg-doc { color: var(--sg-text); }
 .sg-hint { color: var(--sg-dim); font-size: 11px; }
+.sg-hint--pending { margin-left: auto; font-style: italic; }
 
-.sg-body { flex: 1; display: grid; grid-template-columns: 240px 1fr 300px; min-height: 0; }
-.sg-layers, .sg-inspector { background: var(--sg-panel); padding: 10px; color: var(--sg-dim); }
+/* ── Body grid ───────────────────────────────────────────────────────────── */
+.sg-body { flex: 1; display: grid; grid-template-columns: 220px 1fr 300px; min-height: 0; }
+.sg-layers, .sg-inspector { background: var(--sg-panel); padding: 10px; overflow: auto; min-width: 0; }
 .sg-layers { border-right: 1px solid var(--sg-line); }
 .sg-inspector { border-left: 1px solid var(--sg-line); }
-.sg-graph { position: relative; color: var(--sg-dim); display: grid; place-items: center; }
 
-.sg-viewer {
-  height: 220px; border-top: 1px solid var(--sg-line); background: #000;
-  color: var(--sg-dim); display: grid; place-items: center;
+.sg-pane__title {
+  margin: 0 0 8px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--sg-dim);
 }
+.sg-pane__empty, .sg-pane__pending { color: var(--sg-dim); font-size: 11px; }
+.sg-pane__pending { margin-top: 12px; font-style: italic; opacity: 0.7; }
+
+.sg-layers__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sg-layers__item {
+  padding: 6px 8px; border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  background: var(--sg-raised); display: grid; gap: 2px;
+}
+.sg-layers__item[data-active='true'] { border-color: var(--sg-accent); }
+.sg-layers__meta { color: var(--sg-dim); font-size: 11px; }
+
+.sg-inspector__head { display: grid; gap: 2px; margin-bottom: 10px; }
+.sg-inspector__head code, .sg-inspector__params code { color: var(--sg-dim); font-size: 11px; }
+.sg-inspector__params { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sg-inspector__params li { display: flex; justify-content: space-between; gap: 8px; }
+
+/* ── Graph canvas ────────────────────────────────────────────────────────── */
+.sg-graph { position: relative; min-width: 0; background: var(--sg-bg); }
+.sg-graph .react-flow { width: 100%; height: 100%; }
+
+.sg-graph__toolbar { display: flex; align-items: center; gap: 10px; }
+.sg-graph__meta { color: var(--sg-dim); font-size: 11px; }
+.sg-graph__hint { color: var(--sg-dim); font-size: 11px; opacity: 0.65; pointer-events: none; }
+
+.sg-btn {
+  font: inherit; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 4px 10px; cursor: pointer;
+}
+.sg-btn:hover { border-color: var(--sg-accent); color: #fff; }
+
+/* React Flow chrome, retinted to the shell palette. */
+.sg-graph .react-flow__controls-button {
+  background: var(--sg-raised); border-bottom: 1px solid var(--sg-line); fill: var(--sg-text);
+}
+.sg-graph .react-flow__controls-button:hover { background: var(--sg-node-head); }
+.sg-graph .react-flow__minimap {
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+}
+.sg-graph .react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 4px currentColor); }
+
+/* ── Node card ───────────────────────────────────────────────────────────── */
+/* No `overflow: hidden` here: handles sit half outside the card, and clipping
+   them halves both the visible dot and its hit area. Inner corners are rounded
+   individually instead. */
+.sg-node {
+  width: 176px; background: var(--sg-node);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 45%);
+  font-size: 11px;
+}
+.sg-node[data-selected] { border-color: var(--sg-accent); box-shadow: 0 0 0 1px var(--sg-accent), 0 6px 18px rgb(0 0 0 / 55%); }
+.sg-node[data-bypassed] { opacity: 0.45; }
+.sg-node--unknown { border-color: var(--sg-danger); }
+
+.sg-node__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+  padding: 5px 8px; background: var(--sg-node-head); border-bottom: 1px solid var(--sg-line);
+  border-left: 3px solid var(--sg-dim);
+  border-radius: calc(var(--sg-radius) - 1px) calc(var(--sg-radius) - 1px) 0 0;
+}
+.sg-node__title { font-weight: 600; font-size: 12px; }
+.sg-node__cat { color: var(--sg-dim); font-size: 10px; letter-spacing: 0.04em; }
+.sg-node__body { padding: 8px; color: var(--sg-dim); }
+
+/* Category accent on the title bar — the same hue family as the palette. */
+.sg-node--input  .sg-node__head { border-left-color: #7cd3ff; }
+.sg-node--math   .sg-node__head { border-left-color: #a3adbb; }
+.sg-node--noise  .sg-node__head { border-left-color: #a5e34a; }
+.sg-node--color  .sg-node__head { border-left-color: #ffd866; }
+.sg-node--output .sg-node__head { border-left-color: #ff8fa3; }
+
+/* Reserved for the Phase 2 per-node thumbnail. Intentionally inert. */
+.sg-node__preview {
+  height: 56px; margin: 6px 8px; border: 1px dashed var(--sg-line); border-radius: 4px;
+  display: grid; place-items: center; color: var(--sg-dim); font-size: 10px;
+  background: repeating-linear-gradient(45deg, #14171c 0 6px, #171b21 6px 12px);
+}
+
+.sg-node__sockets { padding: 4px 0 6px; }
+.sg-node__group--out + .sg-node__group--in { border-top: 1px solid var(--sg-line); margin-top: 4px; padding-top: 4px; }
+
+.sg-socket { position: relative; display: flex; align-items: center; gap: 6px; height: 20px; padding: 0 10px; }
+.sg-socket--out { justify-content: flex-end; }
+.sg-socket__label { color: var(--sg-text); }
+.sg-socket__type { font-size: 10px; opacity: 0.75; }
+.sg-socket--in .sg-socket__type { margin-left: auto; }
+.sg-socket--out .sg-socket__type { order: -1; margin-right: auto; }
+
+.sg-graph .react-flow__handle.sg-handle {
+  width: 9px; height: 9px; border: 1px solid #0e1013; border-radius: 50%;
+}
+.sg-graph .react-flow__handle.sg-handle.connectingto { box-shadow: 0 0 0 4px rgb(255 107 107 / 45%); }
+.sg-graph .react-flow__handle.sg-handle.connectingto.valid { box-shadow: 0 0 0 4px rgb(87 217 163 / 45%); }
+.sg-graph .react-flow__handle.sg-handle:hover { transform: translate(-50%, -50%) scale(1.25); }
+.sg-graph .react-flow__handle-left.sg-handle:hover { transform: translate(-50%, -50%) scale(1.25); }
+
+.sg-node__pin {
+  padding: 3px 8px; border-top: 1px solid var(--sg-line);
+  color: var(--sg-dim); font-size: 10px; letter-spacing: 0.04em; text-align: center;
+  border-radius: 0 0 calc(var(--sg-radius) - 1px) calc(var(--sg-radius) - 1px);
+}
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+.sg-legend { text-align: right; }
+.sg-legend__toggle {
+  font: inherit; font-size: 11px; color: var(--sg-dim); background: var(--sg-panel);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius); padding: 3px 8px; cursor: pointer;
+}
+.sg-legend__toggle:hover { color: var(--sg-text); }
+.sg-legend__list {
+  list-style: none; margin: 6px 0 0; padding: 8px; text-align: left;
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  display: grid; gap: 3px; font-size: 11px; color: var(--sg-dim);
+}
+.sg-legend__list i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+
+/* ── Add-node palette ────────────────────────────────────────────────────── */
+.sg-palette__shield { position: fixed; inset: 0; z-index: 40; }
+.sg-palette {
+  position: fixed; z-index: 41; width: 240px; max-height: 320px;
+  display: flex; flex-direction: column;
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 60%); overflow: hidden;
+}
+.sg-palette__search {
+  font: inherit; color: var(--sg-text); background: var(--sg-raised);
+  border: 0; border-bottom: 1px solid var(--sg-line); padding: 7px 9px; outline: none;
+}
+.sg-palette__list { overflow: auto; padding: 4px; }
+.sg-palette__group {
+  padding: 6px 6px 2px; font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--sg-dim);
+}
+.sg-palette__item {
+  width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  font: inherit; text-align: left; color: var(--sg-text); background: transparent;
+  border: 0; border-radius: 4px; padding: 5px 6px; cursor: pointer;
+}
+.sg-palette__item[data-active='true'] { background: var(--sg-accent); color: #06121f; }
+.sg-palette__type { font-size: 10px; opacity: 0.6; }
+.sg-palette__empty { padding: 10px; color: var(--sg-dim); font-size: 11px; }
+.sg-palette__hint {
+  padding: 5px 9px; border-top: 1px solid var(--sg-line);
+  color: var(--sg-dim); font-size: 10px;
+}
+
+/* ── Main viewer (reserved, Phase 2) ─────────────────────────────────────── */
+.sg-viewer {
+  height: 120px; border-top: 1px solid var(--sg-line); background: #000;
+  color: var(--sg-dim); font-size: 11px; display: grid; place-items: center;
+}
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+.sg-toast {
+  position: fixed; left: 50%; bottom: 148px; transform: translateX(-50%); z-index: 60;
+  display: flex; align-items: center; gap: 8px; max-width: 460px;
+  padding: 8px 10px; background: var(--sg-panel);
+  border: 1px solid var(--sg-danger); border-radius: var(--sg-radius);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 60%);
+}
+.sg-toast__mark {
+  flex: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--sg-danger); color: #17070a; font-weight: 700; font-size: 11px;
+  display: grid; place-items: center;
+}
+.sg-toast__text { flex: 1; }
+.sg-toast__close {
+  font: inherit; font-size: 14px; line-height: 1; color: var(--sg-dim);
+  background: transparent; border: 0; cursor: pointer; padding: 0 2px;
+}
+.sg-toast__close:hover { color: var(--sg-text); }
