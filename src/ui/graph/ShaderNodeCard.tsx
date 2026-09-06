@@ -17,12 +17,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 
+import type { Diagnostic } from '../../compiler/backend';
 import type { Socket } from '../../model/document';
 import { nodes } from '../../nodes/registry';
 import type { PreviewScheduler } from '../../preview/scheduler';
 import { useEditorStore } from '../store';
 import type { ShaderFlowNode } from './project';
 import { socketColor } from './socketStyle';
+import './nodeBadge.css';
 
 const THUMBNAIL_SIZE = 96;
 /** How often a mounted, visible card polls for a fresh frame. Cheap when the
@@ -127,6 +129,37 @@ function SocketRow({ socket, direction }: { socket: SocketSpec; direction: 'in' 
   );
 }
 
+/** Highest-severity-first, so a node with both an error and a warning shows
+ *  the error's color. Mirrors `Diagnostic['level']`. */
+const LEVEL_RANK: Record<Diagnostic['level'], number> = { error: 2, warning: 1, info: 0 };
+
+/** This node's own diagnostics from the last real compile (`store.compiledProgram`
+ *  — the SAME compile the renderer bound, never re-derived). A diagnostic with
+ *  no `nodeId` (e.g. a whole-document cycle) is not this card's concern: it
+ *  already surfaces via `NoticeToast` (`store.lastError`). */
+function useNodeDiagnostics(nodeId: string): Diagnostic[] {
+  return useEditorStore((s) => s.compiledProgram?.diagnostics.filter((d) => d.nodeId === nodeId) ?? []);
+}
+
+function NodeDiagnosticBadge({ nodeId }: { nodeId: string }) {
+  const diagnostics = useNodeDiagnostics(nodeId);
+  if (diagnostics.length === 0) return null;
+
+  const level = diagnostics.reduce<Diagnostic['level']>(
+    (worst, d) => (LEVEL_RANK[d.level] > LEVEL_RANK[worst] ? d.level : worst),
+    diagnostics[0].level,
+  );
+  const title = diagnostics.map((d) => d.message).join('\n');
+
+  return (
+    <span
+      className={`sg-node-badge sg-node-badge--${level}`}
+      title={title}
+      aria-label={`${level}: ${title}`}
+    />
+  );
+}
+
 export function ShaderNodeCard({ id, data, selected }: NodeProps<ShaderFlowNode>) {
   const def = nodes.get(data.shaderType);
 
@@ -153,6 +186,7 @@ export function ShaderNodeCard({ id, data, selected }: NodeProps<ShaderFlowNode>
       <header className="sg-node__head">
         <span className="sg-node__title">{data.title ?? def.title}</span>
         <span className="sg-node__cat">{def.category}</span>
+        <NodeDiagnosticBadge nodeId={id} />
       </header>
 
       {def.previewable ? <NodeThumbnail nodeId={id} /> : null}

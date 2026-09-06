@@ -1,0 +1,17 @@
+/* ── Node diagnostic badge ───────────────────────────────────────────────── */
+/* A per-node dot in `ShaderNodeCard`'s header, fed by `store.compiledProgram`
+ * diagnostics whose `nodeId` matches this card. Level-colored; hover/click
+ * reveals the message(s) via the native `title` attribute — no extra popover
+ * plumbing needed for a small, at-a-glance indicator. */
+
+.sg-node-badge {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  cursor: default;
+}
+
+.sg-node-badge--error { background: var(--sg-danger); }
+.sg-node-badge--warning { background: #ffd866; }
+.sg-node-badge--info { background: var(--sg-accent); }
