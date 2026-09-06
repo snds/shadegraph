@@ -17,12 +17,12 @@
 // `lastError` → `NoticeToast` channel, so nothing here invents its own errors.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useCallback } from 'react';
+import { useEffect, useState } from 'react';
 
 import type { ShaderLayer } from '../../model/document';
 import { activeLayerId, useEditorStore } from '../store';
 import { BLEND_MODES, BLEND_MODE_LABELS, isBlendMode } from './blendModes';
-import { canMoveLayer, reorderedDocument, topFirst, type StackDirection } from './reorder';
+import { canMoveLayer, topFirst, type StackDirection } from './reorder';
 import './layers.css';
 
 /** Percent, for display and for the opacity slider. */
@@ -35,29 +35,11 @@ export function LayerStack() {
   const setLayerProp = useEditorStore((s) => s.setLayerProp);
   const addLayer = useEditorStore((s) => s.addLayer);
   const removeLayer = useEditorStore((s) => s.removeLayer);
-  const loadDocument = useEditorStore((s) => s.loadDocument);
+  const reorderLayer = useEditorStore((s) => s.reorderLayer);
 
   // When any layer is soloed, only soloed layers composite — so the panel must
   // show the other rows as inert, or the enabled toggles look like they lie.
   const soloing = layers.some((l) => l.soloed);
-
-  const move = useCallback(
-    (id: string, direction: StackDirection) => {
-      // TEMPORARY: no `reorderLayer` action exists on the store yet and this
-      // task may not edit `store.ts`, so the reordered document goes through
-      // `loadDocument`. That action clears the node selection as a side effect
-      // (it is meant for opening files), so the selection is restored right
-      // after — reordering layers must not deselect what you were inspecting.
-      // Replace this whole block with `reorderLayer(id, direction)` once it
-      // exists.
-      const { doc, selectedNodeIds, selectNodes } = useEditorStore.getState();
-      const next = reorderedDocument(doc, id, direction);
-      if (!next) return;
-      loadDocument(next);
-      if (selectedNodeIds.length > 0) selectNodes(selectedNodeIds);
-    },
-    [loadDocument],
-  );
 
   return (
     <aside className="sg-layers" aria-label="Layer stack">
@@ -85,7 +67,7 @@ export function LayerStack() {
             onlyLayer={layers.length <= 1}
             onActivate={setActiveLayer}
             onPatch={setLayerProp}
-            onMove={move}
+            onMove={reorderLayer}
             onRemove={removeLayer}
           />
         ))}
@@ -128,6 +110,23 @@ function LayerRow({
 }: LayerRowProps) {
   const nodeCount = layer.graph.nodes.length;
 
+  // Buffered draft, same pattern as the document name field in `DocToolbar`:
+  // the field only diverges from the store while it has focus, so an
+  // external rename (e.g. undo, later multi-user edits) is never clobbered.
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(layer.name);
+
+  useEffect(() => {
+    if (!renaming) setDraftName(layer.name);
+  }, [layer.name, renaming]);
+
+  function commitRename() {
+    setRenaming(false);
+    const next = draftName.trim();
+    if (next && next !== layer.name) onPatch(layer.id, { name: next });
+    else setDraftName(layer.name);
+  }
+
   return (
     <li
       className="sg-layers__item"
@@ -136,17 +135,38 @@ function LayerRow({
       data-disabled={!layer.enabled || undefined}
     >
       <div className="sg-layers__row">
-        {/* The row header doubles as the "edit this layer's graph" control. */}
-        <button
-          type="button"
-          className="sg-layers__name"
-          onClick={() => onActivate(layer.id)}
-          aria-pressed={active}
-          title={`Edit ${layer.name}'s graph`}
-        >
-          <span className="sg-layers__label">{layer.name}</span>
-          <span className="sg-layers__count">{nodeCount}</span>
-        </button>
+        {renaming ? (
+          <input
+            className="sg-layers__nameInput"
+            value={draftName}
+            autoFocus
+            aria-label={`Rename ${layer.name}`}
+            onChange={(e) => setDraftName(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') {
+                setDraftName(layer.name);
+                setRenaming(false);
+              }
+            }}
+          />
+        ) : (
+          // The row header doubles as the "edit this layer's graph" control;
+          // double-click switches to renaming instead of activating the layer.
+          <button
+            type="button"
+            className="sg-layers__name"
+            onClick={() => onActivate(layer.id)}
+            onDoubleClick={() => setRenaming(true)}
+            aria-pressed={active}
+            title={`Edit ${layer.name}'s graph (double-click to rename)`}
+          >
+            <span className="sg-layers__label">{layer.name}</span>
+            <span className="sg-layers__count">{nodeCount}</span>
+          </button>
+        )}
 
         <div className="sg-layers__moves">
           <button

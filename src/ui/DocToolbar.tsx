@@ -41,6 +41,7 @@ export function DocToolbar() {
   const rig = useEditorStore((s) => s.doc.previewRig);
   const loadDocument = useEditorStore((s) => s.loadDocument);
   const newDocument = useEditorStore((s) => s.newDocument);
+  const renameDocument = useEditorStore((s) => s.renameDocument);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const [draftName, setDraftName] = useState(name);
@@ -63,19 +64,13 @@ export function DocToolbar() {
     if (!editingName) setDraftName(name);
   }, [name, editingName]);
 
-  /** The store has no rename action, and mutating `doc` directly is forbidden,
-   *  so a rename is a full document swap through `loadDocument`. Committed on
-   *  blur/Enter rather than per keystroke because `loadDocument` also clears
-   *  the node selection. (Follow-up: a `renameDocument` action in the store.) */
+  /** Committed on blur/Enter rather than per keystroke, matching the draft
+   *  buffering pattern above. `renameDocument` no-ops on an empty/unchanged
+   *  name, so the draft is simply reset to whatever the store ends up with. */
   function commitName() {
     setEditingName(false);
-    const next = draftName.trim();
-    const doc = useEditorStore.getState().doc;
-    if (!next || next === doc.name) {
-      setDraftName(doc.name);
-      return;
-    }
-    loadDocument({ ...doc, name: next, meta: { ...doc.meta, updated: new Date().toISOString() } });
+    renameDocument(draftName);
+    setDraftName(useEditorStore.getState().doc.name);
   }
 
   function handleNew() {

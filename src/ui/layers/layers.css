@@ -44,6 +44,15 @@
 .sg-layers__count { flex: none; color: var(--sg-dim); font-size: 10px; }
 .sg-layers__count::after { content: ' nodes'; }
 
+/* Double-click on the name button swaps it for this input, same sizing as the
+   button it replaces so the row does not reflow. */
+.sg-layers__nameInput {
+  flex: 1; min-width: 0; font: inherit; color: var(--sg-text);
+  background: var(--sg-raised); border: 1px solid var(--sg-accent);
+  border-radius: 4px; padding: 0 4px;
+}
+.sg-layers__nameInput:focus { outline: none; }
+
 /* ── Reorder ─────────────────────────────────────────────────────────────── */
 .sg-layers__moves { flex: none; display: flex; gap: 2px; }
 .sg-layers__move {
