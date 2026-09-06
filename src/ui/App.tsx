@@ -21,6 +21,7 @@
 // (`MainViewer` → `src/preview/renderer.ts`), not a fake stand-in drawn here.
 
 import { registerStarterNodes } from '../nodes/definitions';
+import { CodePanel } from './codepanel/CodePanel';
 import { DocToolbar } from './DocToolbar';
 import { GraphCanvas } from './graph/GraphCanvas';
 import { Inspector } from './inspector/Inspector';
@@ -45,6 +46,7 @@ export function App() {
       </main>
       <MainViewer />
       <NoticeToast />
+      <CodePanel />
     </div>
   );
 }

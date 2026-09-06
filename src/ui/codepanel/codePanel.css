@@ -1,0 +1,52 @@
+/* ── Code panel ──────────────────────────────────────────────────────────── */
+.sg-codepanel-dock { position: fixed; right: 16px; bottom: 16px; z-index: 50; }
+
+.sg-codepanel-toggle {
+  position: relative;
+  font: inherit; font-size: 11px; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 6px 12px; cursor: pointer;
+}
+.sg-codepanel-toggle:hover { border-color: var(--sg-accent); color: #fff; }
+.sg-codepanel-toggle[aria-pressed='true'] { border-color: var(--sg-accent); }
+.sg-codepanel-toggle__dot {
+  position: absolute; top: -3px; right: -3px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--sg-danger);
+}
+
+.sg-codepanel {
+  position: absolute; right: 0; bottom: 42px; width: 520px; height: 60vh; max-height: 640px;
+  display: flex; flex-direction: column;
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 55%); overflow: hidden;
+}
+
+.sg-codepanel__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-bottom: 1px solid var(--sg-line); background: var(--sg-node-head);
+  flex: none;
+}
+.sg-codepanel__title { font-size: 11px; font-weight: 600; color: var(--sg-dim); }
+.sg-codepanel__close {
+  font: inherit; font-size: 14px; line-height: 1; color: var(--sg-dim);
+  background: transparent; border: 0; cursor: pointer; padding: 0 2px;
+}
+.sg-codepanel__close:hover { color: var(--sg-text); }
+
+.sg-codepanel__empty { color: var(--sg-dim); font-size: 11px; padding: 12px; }
+
+.sg-codepanel__lines {
+  margin: 0; padding: 8px 0 8px 40px; overflow: auto; flex: 1;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--sg-text); white-space: pre;
+}
+.sg-codepanel__line { padding: 0 8px; }
+.sg-codepanel__line::marker { color: var(--sg-dim); }
+.sg-codepanel__line[data-clickable] { background: rgb(78 161 255 / 6%); }
+
+.sg-codepanel__line-btn {
+  font: inherit; color: inherit; background: transparent; border: 0; padding: 0;
+  cursor: pointer; text-align: left; width: 100%;
+}
+.sg-codepanel__line-btn:hover code { color: var(--sg-accent); }
+.sg-codepanel__line-btn:hover { text-decoration: underline; text-decoration-style: dotted; }
