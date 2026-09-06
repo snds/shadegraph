@@ -43,6 +43,7 @@ import { validateConnection } from '../../model/connect';
 import { activeGraph, activeLayerId, useEditorStore } from '../store';
 import { notify } from '../notice';
 import { AddNodePalette } from './AddNodePalette';
+import { cascadeOffset } from './paletteCascade';
 import { ShaderNodeCard } from './ShaderNodeCard';
 import { SocketLegend } from './SocketLegend';
 import { registrySocketLookup } from './socketLookup';
@@ -89,6 +90,10 @@ function GraphCanvasInner() {
   const [palette, setPalette] = useState<PalettePosition | null>(null);
   const { screenToFlowPosition } = useReactFlow();
   const wrapper = useRef<HTMLElement>(null);
+  // Counts toolbar opens so far, so successive "+ Add node" clicks fan out
+  // from the pane center instead of landing on the exact same spot. Pointer-
+  // anchored opens (double-click / right-click) never touch this.
+  const toolbarOpenCount = useRef(0);
 
   // React Flow calls isValidConnection on every pointer move during a drag, and
   // onConnectEnd fires outside React's render pass; refs keep both reading the
@@ -226,7 +231,11 @@ function GraphCanvasInner() {
 
   const openPaletteFromToolbar = useCallback(() => {
     const box = wrapper.current?.getBoundingClientRect();
-    openPaletteAt((box?.left ?? 0) + 120, (box?.top ?? 0) + 80);
+    const centerX = (box?.left ?? 0) + (box?.width ?? 0) / 2;
+    const centerY = (box?.top ?? 0) + (box?.height ?? 0) / 2;
+    const offset = cascadeOffset(toolbarOpenCount.current);
+    toolbarOpenCount.current += 1;
+    openPaletteAt(centerX + offset.dx, centerY + offset.dy);
   }, [openPaletteAt]);
 
   // The output node is not deletable, so React Flow never proposes removing it
@@ -283,10 +292,13 @@ function GraphCanvasInner() {
         <Panel position="top-right">
           <SocketLegend />
         </Panel>
-        <Panel position="bottom-center" className="sg-graph__hint">
-          double-click or right-click the canvas to add a node
-        </Panel>
       </ReactFlow>
+
+      {graph.nodes.length === 0 ? (
+        <div className="sg-graph__hint" aria-hidden="true">
+          double-click or right-click the canvas to add a node
+        </div>
+      ) : null}
 
       {palette ? (
         <AddNodePalette at={palette.client} onPick={pickNode} onClose={() => setPalette(null)} />

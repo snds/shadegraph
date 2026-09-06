@@ -69,7 +69,15 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 
 .sg-graph__toolbar { display: flex; align-items: center; gap: 10px; }
 .sg-graph__meta { color: var(--sg-dim); font-size: 11px; }
-.sg-graph__hint { color: var(--sg-dim); font-size: 11px; opacity: 0.65; pointer-events: none; }
+/* Centered empty-state message: only rendered while the active layer's graph
+   has zero nodes, so it never competes with real content. `pointer-events:
+   none` keeps it from intercepting the double-click / right-click it describes. */
+.sg-graph__hint {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  color: var(--sg-text); font-size: 14px; opacity: 0.85; pointer-events: none;
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 10px 16px; text-align: center;
+}
 
 .sg-btn {
   font: inherit; color: var(--sg-text); background: var(--sg-raised);
