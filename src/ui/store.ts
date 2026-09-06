@@ -122,6 +122,7 @@ export interface EditorStore {
   connect: (source: EndpointRef, target: EndpointRef) => ConnectionCheck;
   disconnect: (edgeId: string) => void;
   setParam: (nodeId: string, paramId: string, value: ScalarOrVector | string) => void;
+  setParamExposed: (nodeId: string, paramId: string, exposed: boolean) => void;
 
   // Layers
   setActiveLayer: (id: string) => void;
@@ -259,6 +260,24 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       if (paramIndex < 0) return null;
       const params = node.params.slice();
       params[paramIndex] = { ...params[paramIndex], value };
+      const nextNodes = graph.nodes.slice();
+      nextNodes[index] = { ...node, params };
+      return { ...graph, nodes: nextNodes };
+    });
+    if (doc) set({ doc, lastError: null });
+    else set({ lastError: `No param "${paramId}" on node "${nodeId}".` });
+  },
+
+  setParamExposed(nodeId, paramId, exposed) {
+    const doc = withActiveGraph(get().doc, (graph) => {
+      const index = graph.nodes.findIndex((n) => n.id === nodeId);
+      if (index < 0) return null;
+      const node = graph.nodes[index];
+      const paramIndex = node.params.findIndex((p) => p.id === paramId);
+      if (paramIndex < 0) return null;
+      if ((node.params[paramIndex].exposed ?? false) === exposed) return null;
+      const params = node.params.slice();
+      params[paramIndex] = { ...params[paramIndex], exposed };
       const nextNodes = graph.nodes.slice();
       nextNodes[index] = { ...node, params };
       return { ...graph, nodes: nextNodes };

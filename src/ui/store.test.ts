@@ -208,6 +208,22 @@ describe('node edits', () => {
     store().setParam(noise, 'ghost', 1);
     expect(store().lastError).toMatch(/No param "ghost"/);
   });
+
+  it('flips a param exposed flag without touching selection or value', () => {
+    const noise = add('test.noise');
+    store().selectNodes([noise]);
+
+    store().setParamExposed(noise, 'octaves', true);
+
+    const param = graph().nodes.find((n) => n.id === noise)?.params.find((p) => p.id === 'octaves');
+    expect(param?.exposed).toBe(true);
+    expect(param?.value).toBe(4);
+    expect(store().selectedNodeIds).toEqual([noise]);
+    expect(store().doc.meta.updated).not.toBe('');
+
+    store().setParamExposed(noise, 'ghost', true);
+    expect(store().lastError).toMatch(/No param "ghost"/);
+  });
 });
 
 describe('layers', () => {
