@@ -174,6 +174,14 @@ export interface LowerGraphResult {
   order: string[];
   pruned: string[];
   cyclic: string[];
+  /** Which node produced each statement `sink.emit()`ed during this call,
+   *  keyed by a 0-based index into JUST this call's own emissions (not the
+   *  shared sink's absolute body position, since one sink can be reused
+   *  across several `lowerGraph` calls — e.g. one per document layer). The
+   *  caller (a backend) knows its own body offset and header-line count, so
+   *  it converts this into an absolute file line for `CompiledProgram.sourceMap`
+   *  (click-to-source in the code panel). */
+  sourceMap: Array<{ line: number; nodeId: string }>;
 }
 
 /** Resolves the emitted expression for one input socket, walking its edge (if
@@ -268,6 +276,8 @@ export function lowerGraph(
 
   const outputCache = new Map<string, string>();
   const input = makeInputResolver(graph, registry, hooks, sink, outputCache);
+  const sourceMap: Array<{ line: number; nodeId: string }> = [];
+  let emittedLines = 0;
 
   for (const nodeId of topo.order) {
     const node = graph.nodes.find((n) => n.id === nodeId);
@@ -321,7 +331,11 @@ export function lowerGraph(
       target: hooks.target,
       temp: sink.temp,
       uniform: sink.uniform,
-      emit: sink.emit,
+      emit: (line: string) => {
+        sourceMap.push({ line: emittedLines, nodeId });
+        emittedLines++;
+        sink.emit(line);
+      },
       diag: sink.diag,
       input,
     };
@@ -333,5 +347,6 @@ export function lowerGraph(
     order: topo.order,
     pruned: topo.pruned,
     cyclic: topo.cyclic,
+    sourceMap,
   };
 }

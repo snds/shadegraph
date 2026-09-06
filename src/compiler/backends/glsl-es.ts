@@ -339,6 +339,18 @@ function assembleFragment(uniformDecls: string[], body: string[]): string {
   return lines.join('\n');
 }
 
+/** Number of source lines that precede the first body statement inside
+ *  `assembleFragment`'s output (i.e. the 0-based line index of `void main()
+ *  {` plus one). Shared by `compileGraph`/`compileDocument` to translate a
+ *  `lowerGraph`-relative `sourceMap` line into an absolute, 1-indexed file
+ *  line for `CompiledProgram.sourceMap` (code-panel click-to-source). Derived
+ *  the same way `assembleFragment` builds its header, rather than duplicating
+ *  a hand-counted constant, so it can never drift from the real prelude. */
+function headerLineCount(uniformDecls: string[]): number {
+  const header = ['precision highp float;', 'varying vec2 vUv;', ...uniformDecls, '', GLSL_PRELUDE, '', 'void main() {'];
+  return header.join('\n').split('\n').length;
+}
+
 /** Compiles a single graph (one layer, or a per-node/per-layer preview slice)
  *  to a self-contained GLSL ES vertex + fragment pair. */
 function compileGraph(
@@ -366,6 +378,8 @@ function compileGraph(
 
   const uniformDecls = handle.uniforms.map((u) => `uniform ${typeName(u.type)} ${u.name};`);
   const fragment = assembleFragment(uniformDecls, handle.body);
+  const offset = headerLineCount(uniformDecls);
+  const sourceMap = result.sourceMap.map(({ line, nodeId }) => ({ line: offset + line + 1, nodeId }));
 
   return {
     target: 'glsl-es',
@@ -373,6 +387,7 @@ function compileGraph(
     fragment,
     uniforms: handle.uniforms,
     diagnostics: handle.diagnostics,
+    sourceMap,
   };
 }
 
@@ -386,6 +401,33 @@ function compileDocument(
   opts?: CompileOptions,
   registry: NodeRegistry = defaultRegistry,
 ): CompiledProgram {
+  if (opts?.previewNodeId) {
+    // Solo-a-node-to-the-main-viewer (`ViewerSource: {kind:'node'}`): resolve
+    // which layer owns the node, then delegate to that layer's own graph —
+    // same isolation strategy as `previewLayerId` just below, one level
+    // deeper. Was previously unhandled here (only `compileGraph` honored
+    // `previewNodeId`), so soloing a node to the main viewer silently fell
+    // through to the full composite instead of showing that node's output.
+    const owner = doc.layerStack.layers.find((l) =>
+      l.graph.nodes.some((n) => n.id === opts.previewNodeId),
+    );
+    if (!owner) {
+      return {
+        target: 'glsl-es',
+        vertex: VERTEX_SHADER,
+        fragment: '',
+        uniforms: [],
+        diagnostics: [
+          {
+            level: 'error',
+            message: `No node "${opts.previewNodeId}" in document "${doc.id}".`,
+          },
+        ],
+      };
+    }
+    return compileGraph(owner.graph, opts, registry);
+  }
+
   if (opts?.previewLayerId) {
     const layer = doc.layerStack.layers.find((l) => l.id === opts.previewLayerId);
     if (!layer) {
@@ -413,9 +455,14 @@ function compileDocument(
 
   const handle = createEmitSink();
   let compositeVar = 'vec3(0.0)';
+  const relativeSourceMap: Array<{ line: number; nodeId: string }> = [];
 
   for (const layer of participating) {
+    const bodyOffset = handle.body.length;
     const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink);
+    for (const entry of result.sourceMap) {
+      relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
+    }
     let layerColor = result.outputExpr;
     if (layerColor === undefined) {
       handle.sink.diag({
@@ -440,6 +487,8 @@ function compileDocument(
 
   const uniformDecls = handle.uniforms.map((u) => `uniform ${typeName(u.type)} ${u.name};`);
   const fragment = assembleFragment(uniformDecls, handle.body);
+  const offset = headerLineCount(uniformDecls);
+  const sourceMap = relativeSourceMap.map(({ line, nodeId }) => ({ line: offset + line + 1, nodeId }));
 
   return {
     target: 'glsl-es',
@@ -447,6 +496,7 @@ function compileDocument(
     fragment,
     uniforms: handle.uniforms,
     diagnostics: handle.diagnostics,
+    sourceMap,
   };
 }
 

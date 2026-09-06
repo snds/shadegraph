@@ -135,6 +135,33 @@ describe('glslEsBackend.compileGraph', () => {
     expect(program.diagnostics).toEqual([]);
     expect(program.fragment).toMatch(/gl_FragColor = vec4\(vec3\(fbm_\d+\), 1\.0\);/);
   });
+
+  // Powers the code panel's click-to-source: every `sourceMap` entry must
+  // name the line that ACTUALLY resulted from that node's own emitter, not an
+  // approximation — verified by indexing into the real fragment text, not by
+  // asserting shape alone.
+  it('sourceMap lines index into the real fragment text and name the emitting node', () => {
+    const graph = uvFbmRampOutputGraph();
+    const program = glslEsBackend.compileGraph(graph);
+    expect(program.sourceMap && program.sourceMap.length).toBeGreaterThan(0);
+    const lines = (program.fragment ?? '').split('\n');
+
+    for (const entry of program.sourceMap ?? []) {
+      // 1-indexed per entry contract; must land inside the fragment.
+      expect(entry.line).toBeGreaterThanOrEqual(1);
+      expect(entry.line).toBeLessThanOrEqual(lines.length);
+    }
+
+    const fbmEntry = program.sourceMap?.find((e) => e.nodeId === 'fbm1');
+    expect(fbmEntry).toBeDefined();
+    expect(lines[(fbmEntry as { line: number }).line - 1]).toMatch(/sg_fbm\(/);
+
+    // color.ramp emits two statements; both must be attributed to it.
+    const rampEntries = (program.sourceMap ?? []).filter((e) => e.nodeId === 'ramp1');
+    expect(rampEntries).toHaveLength(2);
+    expect(lines[rampEntries[0].line - 1]).toMatch(/smoothstep\(/);
+    expect(lines[rampEntries[1].line - 1]).toMatch(/mix\(/);
+  });
 });
 
 describe('glslEsBackend.compileDocument', () => {
@@ -180,6 +207,41 @@ describe('glslEsBackend.compileDocument', () => {
     const program = glslEsBackend.compileDocument(doc, { previewLayerId: overlayId });
     expect(program.fragment).not.toMatch(/= sg_blend\w+\(/);
     expect(program.fragment).toContain('gl_FragColor');
+  });
+
+  // Regression guard for the pre-existing gap flagged by the thumbnails task:
+  // `compileDocument` only honored `previewLayerId`, never `previewNodeId`, so
+  // `PreviewRenderer`'s `ViewerSource: {kind:'node'}` (solo a node to the MAIN
+  // viewer) silently fell back to the full composite instead of that node's
+  // output. Must resolve which layer owns the node and isolate it exactly
+  // like `previewLayerId`, bypassing compositing entirely.
+  it('previewNodeId resolves the owning layer and isolates it, bypassing compositing', () => {
+    const doc = twoLayerDoc();
+    doc.layerStack.layers[1].graph = uvFbmRampOutputGraph();
+    const program = glslEsBackend.compileDocument(doc, { previewNodeId: 'fbm1' });
+    expect(program.diagnostics).toEqual([]);
+    expect(program.fragment).not.toMatch(/= sg_blend\w+\(/);
+    expect(program.fragment).toMatch(/gl_FragColor = vec4\(vec3\(fbm_\d+\), 1\.0\);/);
+  });
+
+  it('previewNodeId reports a diagnostic instead of throwing when no layer owns the node', () => {
+    const doc = twoLayerDoc();
+    const program = glslEsBackend.compileDocument(doc, { previewNodeId: 'does-not-exist' });
+    expect(program.diagnostics.some((d) => d.level === 'error')).toBe(true);
+  });
+
+  // The second layer's nodes are emitted into the SAME shared body after the
+  // first layer's; the sourceMap must carry that offset forward, not restart
+  // from each layer's own zero.
+  it('sourceMap lines stay correct across multiple composited layers', () => {
+    const doc = twoLayerDoc();
+    doc.layerStack.layers[1].graph = uvFbmRampOutputGraph();
+    const program = glslEsBackend.compileDocument(doc);
+    const lines = (program.fragment ?? '').split('\n');
+
+    const fbmEntry = program.sourceMap?.find((e) => e.nodeId === 'fbm1');
+    expect(fbmEntry).toBeDefined();
+    expect(lines[(fbmEntry as { line: number }).line - 1]).toMatch(/sg_fbm\(/);
   });
 
   it('falls back to Normal with a warning diagnostic for the unimplemented "custom" blend', () => {
