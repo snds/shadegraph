@@ -19,6 +19,15 @@ export function slugifyType(type: string): string {
   return type.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'node';
 }
 
+/** Sanitises an arbitrary id into a GLSL-safe identifier fragment (used to
+ *  build deterministic uniform names from node/layer ids). Deliberately the
+ *  same transform as `nodes/definitions/helpers.ts`'s `ident()` — kept as a
+ *  separate copy here so `src/preview/` can reconstruct the exact uniform name
+ *  a compiled program used without importing from `src/nodes/definitions/`. */
+export function sanitizeIdent(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9_]/g, '_');
+}
+
 /** Unique id for a new node of `type`, e.g. `math_mix_k3f9a1`. */
 export function makeNodeId(type: string): string {
   return `${slugifyType(type)}_${suffix()}`;
