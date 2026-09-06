@@ -277,6 +277,7 @@ function GraphCanvasInner() {
         fitViewOptions={FIT_VIEW}
         minZoom={0.2}
         maxZoom={2.5}
+        zoomOnDoubleClick={false}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#2b313b" />
         <Controls showInteractive={false} fitViewOptions={FIT_VIEW} />
