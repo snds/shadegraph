@@ -17,7 +17,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type { ShaderDocument, PreviewRig } from '../model/document';
-import type { TargetLang } from '../compiler/backend';
+import type { CompileOptions, TargetLang } from '../compiler/backend';
 
 export interface ThumbnailRequest {
   nodeId: string;
@@ -31,6 +31,16 @@ export type ViewerSource =
   | { kind: 'document' } // full composited layer stack (default)
   | { kind: 'node'; nodeId: string } // Nuke-style solo a node
   | { kind: 'layer'; layerId: string }; // isolate one layer
+
+/** Maps a `ViewerSource` to the `CompileOptions` that isolate it. Shared by
+ *  `PreviewRenderer` (actually compiling for the GPU) and the code panel
+ *  (compiling the identical slice for display), so both always agree on what
+ *  "the viewer is currently showing" means — never two divergent mappings. */
+export function viewerSourceToCompileOptions(src: ViewerSource): CompileOptions {
+  if (src.kind === 'node') return { previewNodeId: src.nodeId };
+  if (src.kind === 'layer') return { previewLayerId: src.layerId };
+  return {};
+}
 
 export interface PreviewScheduler {
   /** Bind/replace the document being previewed. */

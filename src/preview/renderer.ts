@@ -37,6 +37,7 @@ import {
 // layer-opacity uniform-naming convention from.
 import '../compiler/backends/glsl-es';
 import type { PreviewScheduler, ThumbnailRequest, ViewerSource } from './scheduler';
+import { viewerSourceToCompileOptions } from './scheduler';
 import { collectUniformValues, sameUniformValue, topologySignature } from './topology';
 import { createThumbnailScheduler, diffChangedNodeIds, type ThumbnailHost } from './thumbnails';
 
@@ -256,9 +257,7 @@ export class PreviewRenderer implements PreviewScheduler {
   }
 
   private compileOptions(): CompileOptions {
-    if (this.viewerSource.kind === 'node') return { previewNodeId: this.viewerSource.nodeId };
-    if (this.viewerSource.kind === 'layer') return { previewLayerId: this.viewerSource.layerId };
-    return {};
+    return viewerSourceToCompileOptions(this.viewerSource);
   }
 }
 

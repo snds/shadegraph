@@ -33,7 +33,7 @@ import { emptyLayer } from '../model/factory';
 import { makeEdgeId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
-import type { PreviewScheduler } from '../preview/scheduler';
+import type { PreviewScheduler, ViewerSource } from '../preview/scheduler';
 
 // ── Selectors (pure, reusable by any pane) ─────────────────────────────────
 
@@ -122,6 +122,13 @@ export interface EditorStore {
    *  `selectedNodeIds`: never serialized, never touched by save/load. */
   previewRenderer: PreviewScheduler | null;
   setPreviewRenderer: (renderer: PreviewScheduler | null) => void;
+  /** What the main viewer is currently showing (full composite, a soloed
+   *  node, or a soloed layer). Lives here (not just inside the renderer) so
+   *  the code panel can read it reactively and compile the identical slice
+   *  for display. `MainViewer` forwards every change to the renderer via
+   *  `setViewerSource`. Transient editor state: never serialized. */
+  viewerSource: ViewerSource;
+  setViewerSource: (src: ViewerSource) => void;
 
   // Graph
   /** Instantiate a registry node type into the active graph. Returns its id. */
@@ -163,6 +170,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   previewRenderer: null,
   setPreviewRenderer(renderer) {
     set({ previewRenderer: renderer });
+  },
+  viewerSource: { kind: 'document' },
+  setViewerSource(src) {
+    set({ viewerSource: src });
   },
 
   addNode(type, position) {

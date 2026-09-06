@@ -42,6 +42,7 @@ function createCompileErrorBridge(): (message: string | null) => void {
 
 export function MainViewer() {
   const doc = useEditorStore((s) => s.doc);
+  const viewerSource = useEditorStore((s) => s.viewerSource);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<PreviewRenderer | null>(null);
@@ -72,6 +73,13 @@ export function MainViewer() {
     renderer.setRig(doc.previewRig);
     renderer.setDocument(doc);
   }, [doc]);
+
+  // Keep the renderer's soloed node/layer (or full composite) current. The
+  // code panel reads the same `viewerSource` from the store to display the
+  // identical slice, so both always agree on what "the viewer is showing" is.
+  useEffect(() => {
+    rendererRef.current?.setViewerSource(viewerSource);
+  }, [viewerSource]);
 
   // Canvas backing-store size must match its CSS box in device pixels, or
   // the render looks blurry/stretched; a ResizeObserver keeps it correct
