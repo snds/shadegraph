@@ -1,0 +1,9 @@
+/* ── Main viewer canvas ──────────────────────────────────────────────────── */
+/* `.sg-viewer` itself (height, border, background) is owned by `app.css` —
+   Phase 1 reserved that slot; this file only styles what MainViewer adds
+   inside it. */
+.sg-viewer__canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}

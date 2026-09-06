@@ -15,9 +15,10 @@
 // layer-stack and toolbar tasks each edit exactly one file and never this one.
 // Adding logic here re-couples panes that are meant to stay independent.
 //
-// The main viewer stays an empty reserved strip: Phase 1 ships no rendering,
-// and a fake preview would misrepresent the tool's core promise (previews run
-// the real target program).
+// The main viewer (Phase 2) is the one exception to "never touch this file":
+// Phase 1 deliberately reserved the footer as an empty placeholder for
+// exactly this, since previews must run the real compiled target program
+// (`MainViewer` → `src/preview/renderer.ts`), not a fake stand-in drawn here.
 
 import { registerStarterNodes } from '../nodes/definitions';
 import { DocToolbar } from './DocToolbar';
@@ -26,6 +27,7 @@ import { Inspector } from './inspector/Inspector';
 import { LayerStack } from './layers/LayerStack';
 import { NoticeToast } from './NoticeToast';
 import { bridgeStoreErrors } from './notice';
+import { MainViewer } from './viewer/MainViewer';
 
 // Boot-time wiring, once per module load. `addNode` resolves types through the
 // registry, so nothing can be created until the starter set is registered.
@@ -41,9 +43,7 @@ export function App() {
         <GraphCanvas />
         <Inspector />
       </main>
-      <footer className="sg-viewer" aria-label="Main viewer">
-        <span>main viewer · Phase 2</span>
-      </footer>
+      <MainViewer />
       <NoticeToast />
     </div>
   );
