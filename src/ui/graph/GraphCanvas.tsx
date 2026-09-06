@@ -278,6 +278,12 @@ function GraphCanvasInner() {
         minZoom={0.2}
         maxZoom={2.5}
         zoomOnDoubleClick={false}
+        // Off-screen node cards fully unmount instead of just scrolling out
+        // of the viewport — `ShaderNodeCard`'s thumbnail effect relies on its
+        // own mount/unmount to report node visibility to the shared preview
+        // renderer (`setVisibleNodes`), so a node's thumbnail genuinely stops
+        // costing GPU work once it leaves the viewport.
+        onlyRenderVisibleElements
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#2b313b" />
         <Controls showInteractive={false} fitViewOptions={FIT_VIEW} />

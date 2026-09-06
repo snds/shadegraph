@@ -130,12 +130,14 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 .sg-node--color  .sg-node__head { border-left-color: #ffd866; }
 .sg-node--output .sg-node__head { border-left-color: #ff8fa3; }
 
-/* Reserved for the Phase 2 per-node thumbnail. Intentionally inert. */
+/* Live per-node thumbnail: the ONE shared preview renderer's output, blitted
+ * onto this card's own <canvas> (see ShaderNodeCard.tsx / preview/thumbnails.ts). */
 .sg-node__preview {
-  height: 56px; margin: 6px 8px; border: 1px dashed var(--sg-line); border-radius: 4px;
-  display: grid; place-items: center; color: var(--sg-dim); font-size: 10px;
+  height: 56px; margin: 6px 8px; border: 1px solid var(--sg-line); border-radius: 4px;
+  display: grid; place-items: center; overflow: hidden;
   background: repeating-linear-gradient(45deg, #14171c 0 6px, #171b21 6px 12px);
 }
+.sg-node__preview-canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
 
 .sg-node__sockets { padding: 4px 0 6px; }
 .sg-node__group--out + .sg-node__group--in { border-top: 1px solid var(--sg-line); margin-top: 4px; padding-top: 4px; }

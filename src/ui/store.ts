@@ -33,6 +33,7 @@ import { emptyLayer } from '../model/factory';
 import { makeEdgeId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
+import type { PreviewScheduler } from '../preview/scheduler';
 
 // ── Selectors (pure, reusable by any pane) ─────────────────────────────────
 
@@ -114,6 +115,13 @@ export interface EditorStore {
   selectedNodeIds: string[];
   /** Human-readable reason the last rejected action failed, or `null`. */
   lastError: string | null;
+  /** The one shared preview renderer (`createPreviewRenderer`), set by
+   *  `MainViewer` once its canvas mounts and cleared on unmount. `null`
+   *  before mount / in tests — `ShaderNodeCard` treats that as "no live
+   *  thumbnails yet" rather than crashing. Transient editor state, like
+   *  `selectedNodeIds`: never serialized, never touched by save/load. */
+  previewRenderer: PreviewScheduler | null;
+  setPreviewRenderer: (renderer: PreviewScheduler | null) => void;
 
   // Graph
   /** Instantiate a registry node type into the active graph. Returns its id. */
@@ -152,6 +160,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   doc: initialDocument(),
   selectedNodeIds: [],
   lastError: null,
+  previewRenderer: null,
+  setPreviewRenderer(renderer) {
+    set({ previewRenderer: renderer });
+  },
 
   addNode(type, position) {
     const def = nodes.get(type);

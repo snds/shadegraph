@@ -48,13 +48,17 @@ export function MainViewer() {
 
   // Create the one shared renderer once per mount. Idempotent under
   // StrictMode's double-invoke: `dispose()` tears the WebGL context down
-  // cleanly before the second mount creates a fresh one.
+  // cleanly before the second mount creates a fresh one. Published to the
+  // store so `ShaderNodeCard` can drive its live thumbnail off the SAME
+  // renderer/GPU context — never a second one.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const renderer = createPreviewRenderer(canvas, { onCompileError: createCompileErrorBridge() });
     rendererRef.current = renderer;
+    useEditorStore.getState().setPreviewRenderer(renderer);
     return () => {
+      useEditorStore.getState().setPreviewRenderer(null);
       renderer.dispose();
       rendererRef.current = null;
     };
