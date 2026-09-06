@@ -294,7 +294,10 @@ function GraphCanvasInner() {
         </Panel>
       </ReactFlow>
 
-      {graph.nodes.length === 0 ? (
+      {/* The output node is mandatory and undeletable (`emptyGraph()`), so a
+          layer's graph never truly reaches zero nodes — "empty" here means
+          nothing but that placeholder output has been added yet. */}
+      {graph.nodes.length <= 1 ? (
         <div className="sg-graph__hint" aria-hidden="true">
           double-click or right-click the canvas to add a node
         </div>
