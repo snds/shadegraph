@@ -55,11 +55,18 @@ export function MainViewer() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const renderer = createPreviewRenderer(canvas, { onCompileError: createCompileErrorBridge() });
+    const renderer = createPreviewRenderer(canvas, {
+      onCompileError: createCompileErrorBridge(),
+      // Same compile the GPU just bound (or tried to) — see CompiledProgram's
+      // header comment in renderer.ts. The code panel and node diagnostic
+      // badges both read this from the store rather than recompiling.
+      onCompiled: (program) => useEditorStore.setState({ compiledProgram: program }),
+    });
     rendererRef.current = renderer;
     useEditorStore.getState().setPreviewRenderer(renderer);
     return () => {
       useEditorStore.getState().setPreviewRenderer(null);
+      useEditorStore.setState({ compiledProgram: null });
       renderer.dispose();
       rendererRef.current = null;
     };

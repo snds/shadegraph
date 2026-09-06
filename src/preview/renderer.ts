@@ -70,6 +70,14 @@ export interface PreviewRendererDeps {
    *  error channel. The main viewer wires this to `store.lastError` —
    *  `NoticeToast`'s existing channel, not a second error UI. */
   onCompileError?: (message: string | null) => void;
+  /** Fires with every `CompiledProgram` this renderer actually produces
+   *  (real topology-change recompiles only — never on a value-only uniform
+   *  write), whether or not it had errors: the lowering pass never throws, so
+   *  `compiled` is always valid source + diagnostics even when `gpu.bind`
+   *  gets skipped. Lets the code panel and per-node diagnostic badges reuse
+   *  the SAME compile the GPU was (or would have been) bound to, instead of
+   *  re-compiling a second time. */
+  onCompiled?: (program: CompiledProgram) => void;
 }
 
 /** Drives one `GpuBinding` from `ShaderDocument` edits, recompiling only on a
@@ -98,6 +106,7 @@ export class PreviewRenderer implements PreviewScheduler {
 
   private readonly compile: NonNullable<PreviewRendererDeps['compile']>;
   private readonly onCompileError: PreviewRendererDeps['onCompileError'];
+  private readonly onCompiled: PreviewRendererDeps['onCompiled'];
 
   constructor(
     private readonly gpu: GpuBinding,
@@ -106,6 +115,7 @@ export class PreviewRenderer implements PreviewScheduler {
   ) {
     this.compile = deps.compile ?? ((doc, target, opts) => backends.get(target).compileDocument(doc, opts));
     this.onCompileError = deps.onCompileError;
+    this.onCompiled = deps.onCompiled;
   }
 
   // ── PreviewScheduler: implemented ─────────────────────────────────────────
@@ -198,6 +208,7 @@ export class PreviewRenderer implements PreviewScheduler {
   private recompile(signature: string): void {
     const doc = this.doc as ShaderDocument;
     const compiled = this.compile(doc, this.target, this.compileOptions());
+    this.onCompiled?.(compiled);
     const errors = compiled.diagnostics.filter((d) => d.level === 'error');
 
     if (errors.length > 0) {

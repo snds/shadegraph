@@ -34,6 +34,7 @@ import { makeEdgeId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
 import type { PreviewScheduler, ViewerSource } from '../preview/scheduler';
+import type { CompiledProgram } from '../compiler/backend';
 
 // ── Selectors (pure, reusable by any pane) ─────────────────────────────────
 
@@ -129,6 +130,13 @@ export interface EditorStore {
    *  `setViewerSource`. Transient editor state: never serialized. */
   viewerSource: ViewerSource;
   setViewerSource: (src: ViewerSource) => void;
+  /** The SAME `CompiledProgram` the renderer just bound (or attempted to
+   *  bind) to the GPU for `viewerSource` — set by `MainViewer`'s `onCompiled`
+   *  bridge, never re-derived. Powers the code panel (source + click-to-
+   *  source) and per-node diagnostic badges (`ShaderNodeCard`). `null` before
+   *  the first compile (e.g. no canvas mounted yet, as in tests). */
+  compiledProgram: CompiledProgram | null;
+  setCompiledProgram: (program: CompiledProgram | null) => void;
 
   // Graph
   /** Instantiate a registry node type into the active graph. Returns its id. */
@@ -174,6 +182,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   viewerSource: { kind: 'document' },
   setViewerSource(src) {
     set({ viewerSource: src });
+  },
+  compiledProgram: null,
+  setCompiledProgram(program) {
+    set({ compiledProgram: program });
   },
 
   addNode(type, position) {
