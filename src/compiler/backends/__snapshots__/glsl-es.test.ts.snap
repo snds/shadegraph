@@ -1,0 +1,336 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`glslEsBackend.compileGraph > golden snapshot: UV -> FBM -> Ramp -> Mix -> Output (exercises color<->vec3 coercion) > fragment-with-mix 1`] = `
+"precision highp float;
+varying vec2 vUv;
+uniform vec2 u_uv1_tiling;
+uniform vec2 u_uv1_offset;
+uniform float u_fbm1_frequency;
+uniform float u_fbm1_lacunarity;
+uniform float u_fbm1_gain;
+uniform float u_fbm1_seed;
+uniform vec3 u_ramp1_colorA;
+uniform vec3 u_ramp1_colorB;
+uniform float u_ramp1_posA;
+uniform float u_ramp1_posB;
+
+// ── sg_fbm: value noise + fractal brownian motion ──────────────────────────
+// GLSL ES 1.0 requires for-loop bounds to be constant expressions, so octave
+// count (a runtime int parameter) cannot drive the loop directly. Instead the
+// loop always runs to a fixed maximum and each iteration is masked to zero
+// once it passes the caller's requested octave count.
+float sg_hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float sg_valueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = sg_hash(i);
+  float b = sg_hash(i + vec2(1.0, 0.0));
+  float c = sg_hash(i + vec2(0.0, 1.0));
+  float d = sg_hash(i + vec2(1.0, 1.0));
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+float sg_fbm(vec2 p, int octaves, float lacunarity, float gain) {
+  float sum = 0.0;
+  float amp = 0.5;
+  float freq = 1.0;
+  for (int i = 0; i < 8; i++) {
+    float active = step(float(i), float(octaves) - 0.5);
+    sum += active * amp * sg_valueNoise(p * freq);
+    freq *= lacunarity;
+    amp *= gain;
+  }
+  return sum;
+}
+
+// ── Blend-mode library ──────────────────────────────────────────────────────
+// One shared function per BlendMode, called once per layer during document
+// compositing rather than inlined. Every function shares the signature
+// (vec3 base, vec4 blend, float opacity) -> vec3 so sg_blendHeight can read
+// the incoming layer's own alpha as a height/mask signal without a special
+// case in the caller.
+vec3 sg_blendNormal(vec3 base, vec4 blend, float opacity) {
+  return mix(base, blend.rgb, opacity);
+}
+
+vec3 sg_blendMix(vec3 base, vec4 blend, float opacity) {
+  return mix(base, blend.rgb, opacity);
+}
+
+vec3 sg_blendAdd(vec3 base, vec4 blend, float opacity) {
+  return mix(base, base + blend.rgb, opacity);
+}
+
+vec3 sg_blendMultiply(vec3 base, vec4 blend, float opacity) {
+  return mix(base, base * blend.rgb, opacity);
+}
+
+vec3 sg_blendScreen(vec3 base, vec4 blend, float opacity) {
+  return mix(base, 1.0 - (1.0 - base) * (1.0 - blend.rgb), opacity);
+}
+
+vec3 sg_overlayChannel(vec3 b, vec3 s) {
+  vec3 lo = 2.0 * b * s;
+  vec3 hi = 1.0 - 2.0 * (1.0 - b) * (1.0 - s);
+  return mix(lo, hi, step(0.5, b));
+}
+
+vec3 sg_blendOverlay(vec3 base, vec4 blend, float opacity) {
+  return mix(base, sg_overlayChannel(base, blend.rgb), opacity);
+}
+
+vec3 sg_softLightD(vec3 x) {
+  vec3 lo = ((16.0 * x - 12.0) * x + 4.0) * x;
+  vec3 hi = sqrt(max(x, 0.0));
+  return mix(lo, hi, step(0.25, x));
+}
+
+vec3 sg_softLightChannel(vec3 b, vec3 s) {
+  vec3 lo = b - (1.0 - 2.0 * s) * b * (1.0 - b);
+  vec3 hi = b + (2.0 * s - 1.0) * (sg_softLightD(b) - b);
+  return mix(lo, hi, step(0.5, s));
+}
+
+vec3 sg_blendSoftLight(vec3 base, vec4 blend, float opacity) {
+  return mix(base, sg_softLightChannel(base, blend.rgb), opacity);
+}
+
+vec3 sg_blendSubtract(vec3 base, vec4 blend, float opacity) {
+  return mix(base, max(base - blend.rgb, 0.0), opacity);
+}
+
+// Height-based blend: uses the incoming layer's own alpha as a mask, biased by
+// its opacity dial, so a fully-opaque layer with alpha 1 always shows through
+// and a lower opacity narrows the mask toward the base.
+vec3 sg_blendHeight(vec3 base, vec4 blend, float opacity) {
+  float h = clamp(blend.a + (opacity - 0.5) * 2.0, 0.0, 1.0);
+  return mix(base, blend.rgb, h);
+}
+
+void main() {
+  vec2 uv_0 = vUv * u_uv1_tiling + u_uv1_offset;
+  float fbm_1 = sg_fbm(uv_0 * u_fbm1_frequency + u_fbm1_seed, 4, u_fbm1_lacunarity, u_fbm1_gain);
+  float rampT_2 = smoothstep(u_ramp1_posA, u_ramp1_posB, fbm_1);
+  vec3 ramp_3 = mix(u_ramp1_colorA, u_ramp1_colorB, rampT_2);
+  vec3 mix_4 = mix(ramp_3, vec3(1.0, 1.0, 1.0), clamp(0.5, 0.0, 1.0));
+  vec4 surface_5 = vec4(mix_4 + vec3(0.0, 0.0, 0.0), 1.0);
+  gl_FragColor = surface_5;
+}"
+`;
+
+exports[`glslEsBackend.compileGraph > golden snapshot: UV -> FBM -> Ramp -> Output > fragment 1`] = `
+"precision highp float;
+varying vec2 vUv;
+uniform vec2 u_uv1_tiling;
+uniform vec2 u_uv1_offset;
+uniform float u_fbm1_frequency;
+uniform float u_fbm1_lacunarity;
+uniform float u_fbm1_gain;
+uniform float u_fbm1_seed;
+uniform vec3 u_ramp1_colorA;
+uniform vec3 u_ramp1_colorB;
+uniform float u_ramp1_posA;
+uniform float u_ramp1_posB;
+
+// ── sg_fbm: value noise + fractal brownian motion ──────────────────────────
+// GLSL ES 1.0 requires for-loop bounds to be constant expressions, so octave
+// count (a runtime int parameter) cannot drive the loop directly. Instead the
+// loop always runs to a fixed maximum and each iteration is masked to zero
+// once it passes the caller's requested octave count.
+float sg_hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float sg_valueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float a = sg_hash(i);
+  float b = sg_hash(i + vec2(1.0, 0.0));
+  float c = sg_hash(i + vec2(0.0, 1.0));
+  float d = sg_hash(i + vec2(1.0, 1.0));
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+float sg_fbm(vec2 p, int octaves, float lacunarity, float gain) {
+  float sum = 0.0;
+  float amp = 0.5;
+  float freq = 1.0;
+  for (int i = 0; i < 8; i++) {
+    float active = step(float(i), float(octaves) - 0.5);
+    sum += active * amp * sg_valueNoise(p * freq);
+    freq *= lacunarity;
+    amp *= gain;
+  }
+  return sum;
+}
+
+// ── Blend-mode library ──────────────────────────────────────────────────────
+// One shared function per BlendMode, called once per layer during document
+// compositing rather than inlined. Every function shares the signature
+// (vec3 base, vec4 blend, float opacity) -> vec3 so sg_blendHeight can read
+// the incoming layer's own alpha as a height/mask signal without a special
+// case in the caller.
+vec3 sg_blendNormal(vec3 base, vec4 blend, float opacity) {
+  return mix(base, blend.rgb, opacity);
+}
+
+vec3 sg_blendMix(vec3 base, vec4 blend, float opacity) {
+  return mix(base, blend.rgb, opacity);
+}
+
+vec3 sg_blendAdd(vec3 base, vec4 blend, float opacity) {
+  return mix(base, base + blend.rgb, opacity);
+}
+
+vec3 sg_blendMultiply(vec3 base, vec4 blend, float opacity) {
+  return mix(base, base * blend.rgb, opacity);
+}
+
+vec3 sg_blendScreen(vec3 base, vec4 blend, float opacity) {
+  return mix(base, 1.0 - (1.0 - base) * (1.0 - blend.rgb), opacity);
+}
+
+vec3 sg_overlayChannel(vec3 b, vec3 s) {
+  vec3 lo = 2.0 * b * s;
+  vec3 hi = 1.0 - 2.0 * (1.0 - b) * (1.0 - s);
+  return mix(lo, hi, step(0.5, b));
+}
+
+vec3 sg_blendOverlay(vec3 base, vec4 blend, float opacity) {
+  return mix(base, sg_overlayChannel(base, blend.rgb), opacity);
+}
+
+vec3 sg_softLightD(vec3 x) {
+  vec3 lo = ((16.0 * x - 12.0) * x + 4.0) * x;
+  vec3 hi = sqrt(max(x, 0.0));
+  return mix(lo, hi, step(0.25, x));
+}
+
+vec3 sg_softLightChannel(vec3 b, vec3 s) {
+  vec3 lo = b - (1.0 - 2.0 * s) * b * (1.0 - b);
+  vec3 hi = b + (2.0 * s - 1.0) * (sg_softLightD(b) - b);
+  return mix(lo, hi, step(0.5, s));
+}
+
+vec3 sg_blendSoftLight(vec3 base, vec4 blend, float opacity) {
+  return mix(base, sg_softLightChannel(base, blend.rgb), opacity);
+}
+
+vec3 sg_blendSubtract(vec3 base, vec4 blend, float opacity) {
+  return mix(base, max(base - blend.rgb, 0.0), opacity);
+}
+
+// Height-based blend: uses the incoming layer's own alpha as a mask, biased by
+// its opacity dial, so a fully-opaque layer with alpha 1 always shows through
+// and a lower opacity narrows the mask toward the base.
+vec3 sg_blendHeight(vec3 base, vec4 blend, float opacity) {
+  float h = clamp(blend.a + (opacity - 0.5) * 2.0, 0.0, 1.0);
+  return mix(base, blend.rgb, h);
+}
+
+void main() {
+  vec2 uv_0 = vUv * u_uv1_tiling + u_uv1_offset;
+  float fbm_1 = sg_fbm(uv_0 * u_fbm1_frequency + u_fbm1_seed, 4, u_fbm1_lacunarity, u_fbm1_gain);
+  float rampT_2 = smoothstep(u_ramp1_posA, u_ramp1_posB, fbm_1);
+  vec3 ramp_3 = mix(u_ramp1_colorA, u_ramp1_colorB, rampT_2);
+  vec4 surface_4 = vec4(ramp_3 + vec3(0.0, 0.0, 0.0), 1.0);
+  gl_FragColor = surface_4;
+}"
+`;
+
+exports[`glslEsBackend.compileGraph > golden snapshot: UV -> FBM -> Ramp -> Output > uniforms 1`] = `
+[
+  {
+    "default": [
+      1,
+      1,
+    ],
+    "name": "u_uv1_tiling",
+    "paramId": "tiling",
+    "type": "vec2",
+  },
+  {
+    "default": [
+      0,
+      0,
+    ],
+    "name": "u_uv1_offset",
+    "paramId": "offset",
+    "type": "vec2",
+  },
+  {
+    "default": 2,
+    "name": "u_fbm1_frequency",
+    "paramId": "frequency",
+    "type": "float",
+  },
+  {
+    "default": 2,
+    "name": "u_fbm1_lacunarity",
+    "paramId": "lacunarity",
+    "type": "float",
+  },
+  {
+    "default": 0.5,
+    "name": "u_fbm1_gain",
+    "paramId": "gain",
+    "type": "float",
+  },
+  {
+    "default": 0,
+    "name": "u_fbm1_seed",
+    "paramId": "seed",
+    "type": "float",
+  },
+  {
+    "default": [
+      0,
+      0,
+      0,
+    ],
+    "name": "u_ramp1_colorA",
+    "paramId": "colorA",
+    "type": "color",
+  },
+  {
+    "default": [
+      1,
+      1,
+      1,
+    ],
+    "name": "u_ramp1_colorB",
+    "paramId": "colorB",
+    "type": "color",
+  },
+  {
+    "default": 0,
+    "name": "u_ramp1_posA",
+    "paramId": "posA",
+    "type": "float",
+  },
+  {
+    "default": 1,
+    "name": "u_ramp1_posB",
+    "paramId": "posB",
+    "type": "float",
+  },
+]
+`;
+
+exports[`glslEsBackend.compileGraph > golden snapshot: UV -> FBM -> Ramp -> Output > vertex 1`] = `
+"precision highp float;
+attribute vec3 position;
+attribute vec2 uv;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}"
+`;
