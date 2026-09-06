@@ -1,0 +1,73 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — Inspector styles
+   Consumes the shared tokens declared on `:root` in `app.css` (colors, radius)
+   but owns every class below; nothing here is added to the shared stylesheet.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-pane__subtitle {
+  margin: 14px 0 6px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--sg-dim);
+}
+
+/* ── Shared field chrome (fields.tsx) ────────────────────────────────────── */
+.sg-field {
+  font: inherit; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 3px 6px; width: 100%; min-width: 0;
+}
+.sg-field:focus { outline: none; border-color: var(--sg-accent); }
+
+/* ── Param rows ───────────────────────────────────────────────────────────── */
+.sg-param { display: grid; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--sg-line); }
+.sg-param:last-child { border-bottom: 0; }
+.sg-param__row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sg-param__label { color: var(--sg-text); }
+.sg-param__expose {
+  display: flex; align-items: center; gap: 4px;
+  color: var(--sg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  cursor: pointer; white-space: nowrap;
+}
+.sg-param__expose input { accent-color: var(--sg-accent); }
+
+.sg-param__slider-row { display: grid; grid-template-columns: 1fr 56px; align-items: center; gap: 6px; }
+.sg-param__range { width: 100%; accent-color: var(--sg-accent); }
+.sg-param__slider-readout { text-align: right; }
+
+.sg-param__toggle { accent-color: var(--sg-accent); justify-self: start; }
+
+.sg-param__select {
+  font: inherit; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius); padding: 3px 6px;
+}
+
+.sg-param__color-row { display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 6px; }
+.sg-param__swatch {
+  width: 28px; height: 24px; padding: 0; border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius); background: transparent; cursor: pointer;
+}
+
+.sg-param__vector-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 4px; }
+
+/* ── Document properties ─────────────────────────────────────────────────── */
+.sg-doc-summary__list {
+  margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 11px;
+}
+.sg-doc-summary__list dt { color: var(--sg-dim); }
+.sg-doc-summary__list dd { margin: 0; color: var(--sg-text); text-align: right; }
+
+/* ── Blackboard ───────────────────────────────────────────────────────────── */
+.sg-blackboard__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sg-blackboard__row {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 6px;
+  padding: 5px 6px; border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  background: var(--sg-raised);
+}
+.sg-blackboard__meta { display: grid; gap: 1px; min-width: 0; }
+.sg-blackboard__label { color: var(--sg-text); font-size: 11px; }
+.sg-blackboard__source { color: var(--sg-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-blackboard__value { color: var(--sg-dim); font-size: 11px; }
+.sg-blackboard__unexpose {
+  font: inherit; line-height: 1; color: var(--sg-dim); background: transparent;
+  border: 0; cursor: pointer; padding: 0 2px; font-size: 13px;
+}
+.sg-blackboard__unexpose:hover { color: var(--sg-danger); }
