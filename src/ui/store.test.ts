@@ -281,6 +281,32 @@ describe('layers', () => {
     expect(store().doc.layerStack.layers).toHaveLength(1);
     expect(store().lastError).toMatch(/at least one layer/);
   });
+
+  it('reorders a layer one step and preserves selection', () => {
+    const base = activeLayer(store().doc).id;
+    const top = store().addLayer('Crust') as string;
+    store().setActiveLayer(base);
+    const uv = add('test.uv');
+    store().selectNodes([uv]);
+
+    store().reorderLayer(base, 'up');
+
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([top, base]);
+    expect(store().selectedNodeIds).toEqual([uv]);
+  });
+
+  it('is a no-op at either end of the stack', () => {
+    const base = activeLayer(store().doc).id;
+    const top = store().addLayer('Crust') as string;
+    const before = store().doc;
+
+    store().reorderLayer(top, 'up');
+    expect(store().doc).toBe(before);
+
+    store().reorderLayer(base, 'down');
+    expect(store().doc).toBe(before);
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, top]);
+  });
 });
 
 describe('document lifecycle', () => {
@@ -320,5 +346,25 @@ describe('document lifecycle', () => {
     expect(graph().nodes).toHaveLength(1);
     expect(store().selectedNodeIds).toEqual([]);
     expect(store().lastError).toBeNull();
+  });
+
+  it('renames the document, trims the name, and preserves selection', () => {
+    const uv = add('test.uv');
+    store().selectNodes([uv]);
+
+    store().renameDocument('  Molten Rock  ');
+
+    expect(store().doc.name).toBe('Molten Rock');
+    expect(store().selectedNodeIds).toEqual([uv]);
+  });
+
+  it('renameDocument no-ops on an empty or unchanged name', () => {
+    const before = store().doc;
+
+    store().renameDocument('   ');
+    expect(store().doc).toBe(before);
+
+    store().renameDocument(before.name);
+    expect(store().doc).toBe(before);
   });
 });
