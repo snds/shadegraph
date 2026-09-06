@@ -32,6 +32,7 @@ import {
 import { emptyLayer } from '../model/factory';
 import { makeEdgeId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
+import { moveLayer, type StackDirection } from './layers/reorder';
 
 // ── Selectors (pure, reusable by any pane) ─────────────────────────────────
 
@@ -129,11 +130,17 @@ export interface EditorStore {
   addLayer: (name?: string) => string | null;
   removeLayer: (id: string) => void;
   setLayerProp: (id: string, patch: LayerPatch) => void;
+  /** Move one layer a single step in SCREEN direction (see `./layers/reorder`).
+   *  No-op at either end of the stack. Never touches `selectedNodeIds`. */
+  reorderLayer: (id: string, direction: StackDirection) => void;
 
   // Editor / document
   selectNodes: (ids: string[]) => void;
   loadDocument: (doc: ShaderDocument) => void;
   newDocument: (name?: string) => void;
+  /** Rename the whole document. No-op on an empty/unchanged trimmed name.
+   *  Never touches `selectedNodeIds`. */
+  renameDocument: (name: string) => void;
   clearError: () => void;
 }
 
@@ -362,6 +369,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     });
   },
 
+  reorderLayer(id, direction) {
+    const doc = get().doc;
+    const layers = moveLayer(doc.layerStack.layers, id, direction);
+    if (!layers) return;
+    set({
+      doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      lastError: null,
+    });
+  },
+
   selectNodes(ids) {
     set({ selectedNodeIds: [...ids] });
   },
@@ -372,6 +389,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   newDocument(name) {
     set({ doc: initialDocument(name), selectedNodeIds: [], lastError: null });
+  },
+
+  renameDocument(name) {
+    const next = name.trim();
+    const doc = get().doc;
+    if (!next || next === doc.name) return;
+    set({ doc: touch({ ...doc, name: next }), lastError: null });
   },
 
   clearError() {
