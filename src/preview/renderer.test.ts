@@ -218,11 +218,100 @@ describe('PreviewRenderer — recompile vs. direct uniform write', () => {
     expect(compile).toHaveBeenCalledTimes(3);
   });
 
-  it('the three thumbnail-only methods throw (out of scope for this task)', () => {
+  it('the thumbnail methods fail when no ThumbnailHost is wired (bare PreviewRenderer, no 3rd ctor arg)', async () => {
     const gpu = fakeGpu();
     const renderer = new PreviewRenderer(gpu, { compile: fakeCompile([]) });
     expect(() => renderer.setVisibleNodes([])).toThrow();
-    expect(() => renderer.requestThumbnail({ nodeId: 'x' })).toThrow();
+    await expect(renderer.requestThumbnail({ nodeId: 'x' })).rejects.toThrow();
     expect(() => renderer.setThumbnailBudget(16)).toThrow();
+  });
+});
+
+// ── PreviewRenderer ⇄ ThumbnailHost wiring ──────────────────────────────────
+// `createPreviewRenderer` is the only real caller that wires a `ThumbnailHost`
+// in (a real `ThumbnailScheduler`, exercised on its own in `thumbnails.test.ts`
+// with a fake `ThumbnailGpu`); these tests only prove `PreviewRenderer`
+// delegates to whatever `ThumbnailHost` it is given, via a plain fake.
+describe('PreviewRenderer — delegates to an injected ThumbnailHost', () => {
+  function fakeThumbnails() {
+    return {
+      onDocumentCalls: [] as Array<{ target: string; changed: string[] }>,
+      markDirtyCalls: [] as string[],
+      markAllDirtyCalls: 0,
+      visibleCalls: [] as string[][],
+      budgetCalls: [] as number[],
+      disposeCalls: 0,
+      onDocument(_doc: unknown, target: string, changed: Set<string>) {
+        this.onDocumentCalls.push({ target, changed: [...changed].sort() });
+      },
+      markDirty(nodeId: string) {
+        this.markDirtyCalls.push(nodeId);
+      },
+      markAllDirty() {
+        this.markAllDirtyCalls++;
+      },
+      setVisibleNodes(ids: string[]) {
+        this.visibleCalls.push(ids);
+      },
+      request(req: { nodeId: string }) {
+        return Promise.resolve({ __fakeCanvasFor: req.nodeId } as unknown as HTMLCanvasElement);
+      },
+      setBudget(ms: number) {
+        this.budgetCalls.push(ms);
+      },
+      dispose() {
+        this.disposeCalls++;
+      },
+    };
+  }
+
+  it('setDocument diffs old vs. new doc and forwards changed node ids', () => {
+    const gpu = fakeGpu();
+    const thumbnails = fakeThumbnails();
+    const compile = fakeCompile(['u_fbm1_frequency', layerOpacityUniformName(docWithFrequencyNode().layerStack.layers[0].id)]);
+    const renderer = new PreviewRenderer(gpu, { compile }, thumbnails);
+
+    const doc = docWithFrequencyNode();
+    // First call has no previous doc to diff against, so every node in the
+    // doc counts as "changed" — assert only the SECOND call, which has a
+    // real baseline, to prove the diff is actually narrow.
+    renderer.setDocument(doc);
+    expect(thumbnails.onDocumentCalls).toHaveLength(1);
+
+    const edited = clone(doc);
+    edited.layerStack.layers[0].graph.nodes[0].params[0].value = 9;
+    renderer.setDocument(edited);
+    expect(thumbnails.onDocumentCalls).toHaveLength(2);
+    expect(thumbnails.onDocumentCalls[1].changed).toEqual(['fbm1']);
+  });
+
+  it('setVisibleNodes / requestThumbnail / setThumbnailBudget delegate directly', async () => {
+    const gpu = fakeGpu();
+    const thumbnails = fakeThumbnails();
+    const renderer = new PreviewRenderer(gpu, { compile: fakeCompile([]) }, thumbnails);
+
+    renderer.setVisibleNodes(['a', 'b']);
+    expect(thumbnails.visibleCalls).toEqual([['a', 'b']]);
+
+    const canvas = await renderer.requestThumbnail({ nodeId: 'a' });
+    expect(canvas).toEqual({ __fakeCanvasFor: 'a' });
+
+    renderer.setThumbnailBudget(4);
+    expect(thumbnails.budgetCalls).toEqual([4]);
+  });
+
+  it('markDirty / markAllDirty / dispose delegate to the ThumbnailHost', () => {
+    const gpu = fakeGpu();
+    const thumbnails = fakeThumbnails();
+    const renderer = new PreviewRenderer(gpu, { compile: fakeCompile([]) }, thumbnails);
+
+    renderer.markDirty('fbm1');
+    expect(thumbnails.markDirtyCalls).toEqual(['fbm1']);
+
+    renderer.markAllDirty();
+    expect(thumbnails.markAllDirtyCalls).toBe(1);
+
+    renderer.dispose();
+    expect(thumbnails.disposeCalls).toBe(1);
   });
 });

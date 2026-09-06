@@ -38,11 +38,12 @@ import {
 import '../compiler/backends/glsl-es';
 import type { PreviewScheduler, ThumbnailRequest, ViewerSource } from './scheduler';
 import { collectUniformValues, sameUniformValue, topologySignature } from './topology';
+import { createThumbnailScheduler, diffChangedNodeIds, type ThumbnailHost } from './thumbnails';
 
 function notImplemented(method: string): Error {
   return new Error(
-    `PreviewRenderer.${method}() is not implemented — thumbnails are a separate task (see the ` +
-      '"Main viewer" task note for scope). The main viewer does not need it.',
+    `PreviewRenderer.${method}() is not implemented — no ThumbnailHost was wired into this ` +
+      'PreviewRenderer (only real usage, via createPreviewRenderer(), wires one).',
   );
 }
 
@@ -100,6 +101,7 @@ export class PreviewRenderer implements PreviewScheduler {
   constructor(
     private readonly gpu: GpuBinding,
     deps: PreviewRendererDeps = {},
+    private readonly thumbnails?: ThumbnailHost,
   ) {
     this.compile = deps.compile ?? ((doc, target, opts) => backends.get(target).compileDocument(doc, opts));
     this.onCompileError = deps.onCompileError;
@@ -108,7 +110,9 @@ export class PreviewRenderer implements PreviewScheduler {
   // ── PreviewScheduler: implemented ─────────────────────────────────────────
 
   setDocument(doc: ShaderDocument): void {
+    const prevDoc = this.doc;
     this.doc = doc;
+    this.thumbnails?.onDocument(doc, this.target, diffChangedNodeIds(prevDoc, doc));
     this.reconcile();
   }
 
@@ -116,6 +120,7 @@ export class PreviewRenderer implements PreviewScheduler {
     if (target === this.target) return;
     this.target = target;
     this.forceRecompile = true;
+    this.thumbnails?.markAllDirty();
     this.reconcile();
   }
 
@@ -132,33 +137,42 @@ export class PreviewRenderer implements PreviewScheduler {
     this.reconcile();
   }
 
-  markDirty(_nodeId: string): void {
-    // Per-node dirtiness only matters once per-node thumbnails exist (next
-    // task); the main viewer always reflects the latest full-document
-    // compile, so there is nothing narrower to invalidate here.
+  /** Marks `nodeId` and its downstream subtree's thumbnails stale. Every doc
+   *  edit already routes through `setDocument`, which diffs old vs. new and
+   *  calls this same propagation automatically — this is for a caller that
+   *  wants to invalidate a node explicitly (e.g. an upstream asset changed
+   *  out-of-band). The main viewer's own output is always the latest full
+   *  compile, so there is nothing narrower to invalidate there. */
+  markDirty(nodeId: string): void {
+    this.thumbnails?.markDirty(nodeId);
   }
 
   markAllDirty(): void {
     this.forceRecompile = true;
+    this.thumbnails?.markAllDirty();
     this.reconcile();
   }
 
   dispose(): void {
+    this.thumbnails?.dispose();
     this.gpu.dispose();
   }
 
-  // ── PreviewScheduler: next task's scope ───────────────────────────────────
+  // ── PreviewScheduler: per-node thumbnails ─────────────────────────────────
 
-  setVisibleNodes(_nodeIds: string[]): void {
-    throw notImplemented('setVisibleNodes');
+  setVisibleNodes(nodeIds: string[]): void {
+    if (!this.thumbnails) throw notImplemented('setVisibleNodes');
+    this.thumbnails.setVisibleNodes(nodeIds);
   }
 
-  requestThumbnail(_req: ThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement> {
-    throw notImplemented('requestThumbnail');
+  requestThumbnail(req: ThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement> {
+    if (!this.thumbnails) return Promise.reject(notImplemented('requestThumbnail'));
+    return this.thumbnails.request(req);
   }
 
-  setThumbnailBudget(_msPerFrame: number): void {
-    throw notImplemented('setThumbnailBudget');
+  setThumbnailBudget(msPerFrame: number): void {
+    if (!this.thumbnails) throw notImplemented('setThumbnailBudget');
+    this.thumbnails.setBudget(msPerFrame);
   }
 
   // ── Extra (not part of PreviewScheduler): canvas sizing ───────────────────
@@ -296,7 +310,10 @@ function rigSetup(rig: PreviewRig): RigSetup {
   }
 }
 
-function toThreeUniformValue(type: SocketType, value: ScalarOrVector | string): unknown {
+/** Exported for `thumbnails.ts`'s `createThumbnailGpu`, so both halves of the
+ *  one shared renderer convert a `NodeParam`/uniform value into a three.js
+ *  uniform value the exact same way. */
+export function toThreeUniformValue(type: SocketType, value: ScalarOrVector | string): unknown {
   switch (type) {
     case 'float':
       return typeof value === 'number' ? value : 0;
@@ -326,12 +343,22 @@ function toThreeUniformValue(type: SocketType, value: ScalarOrVector | string): 
   }
 }
 
-/** Real `GpuBinding`: one `THREE.WebGLRenderer` bound to `canvas`, driven by a
- *  continuous render loop (so `input.time`'s `uTime` animates and any rig's
- *  gentle idle spin plays) for as long as the main viewer is mounted. */
-export function createThreeGpuBinding(canvas: HTMLCanvasElement): GpuBinding {
+/** Constructs the ONE `THREE.WebGLRenderer`/WebGL2 context `createPreviewRenderer`
+ *  shares between the main viewer's `GpuBinding` and the thumbnail scheduler's
+ *  `ThumbnailGpu` (`thumbnails.ts`) — split out so both can be handed the same
+ *  instance instead of each creating its own context. */
+export function createThreeRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
   renderer.setClearColor(0x000000, 1);
+  return renderer;
+}
+
+/** Real `GpuBinding`: driven by a continuous render loop (so `input.time`'s
+ *  `uTime` animates and any rig's gentle idle spin plays) for as long as the
+ *  main viewer is mounted, on `renderer` — the SAME shared context the
+ *  thumbnail scheduler renders into via `setRenderTarget`, never a second
+ *  `WebGLRenderer`/canvas. */
+export function createThreeGpuBinding(renderer: THREE.WebGLRenderer): GpuBinding {
   const scene = new THREE.Scene();
   const clock = new THREE.Clock();
 
@@ -414,11 +441,18 @@ export function createThreeGpuBinding(canvas: HTMLCanvasElement): GpuBinding {
   return { bind, setUniformValue, resize, dispose };
 }
 
-/** The one shared renderer for the main viewer: wires a real `GpuBinding`
- *  (three.js/WebGL2 on `canvas`) into a `PreviewRenderer`. */
+/** The one shared renderer for BOTH the main viewer and every per-node
+ *  thumbnail (AGENTS.md: "One shared renderer... Dirty + visible only."): a
+ *  single `THREE.WebGLRenderer`/WebGL2 context on `canvas` backs a real
+ *  `GpuBinding` (the main viewer's continuous render loop) AND a
+ *  `ThumbnailScheduler` (pooled offscreen render targets, dirty+visible+
+ *  budget gated) — never two contexts. */
 export function createPreviewRenderer(
   canvas: HTMLCanvasElement,
   deps?: PreviewRendererDeps,
 ): PreviewRenderer {
-  return new PreviewRenderer(createThreeGpuBinding(canvas), deps);
+  const renderer = createThreeRenderer(canvas);
+  const binding = createThreeGpuBinding(renderer);
+  const thumbnails = createThumbnailScheduler(renderer);
+  return new PreviewRenderer(binding, deps, thumbnails);
 }
