@@ -22,6 +22,7 @@ import type {
   ShaderGraph,
   SocketType,
 } from '../../model/document';
+import { sanitizeIdent } from '../../model/ids';
 import { nodes as defaultRegistry, type NodeRegistry } from '../../nodes/registry';
 import {
   backends,
@@ -31,6 +32,18 @@ import {
   type ShaderBackend,
 } from '../backend';
 import { createEmitSink, lowerGraph, type LowerHooks } from '../lower';
+
+// A layer's opacity is a dial, not a topology choice — it must drive a
+// uniform (see `paramUniform` in `nodes/definitions/helpers.ts` for the
+// per-node-param convention this mirrors) rather than being baked in as a
+// GLSL literal, or dragging the opacity slider would force a recompile.
+// `ShaderLayer` has no owning `ShaderNode`/param id of its own, so this is a
+// synthetic, layer-level uniform name. Exported so `src/preview/topology.ts`
+// can predict this exact name at bind time (to resolve its uniform location)
+// without duplicating the naming scheme and risking drift.
+export function layerOpacityUniformName(layerId: string): string {
+  return `u_layer_${sanitizeIdent(layerId)}_opacity`;
+}
 
 // ── GLSL type-name mapping ──────────────────────────────────────────────────
 // `color`/`normal` are semantic aliases of `vec3` in this backend: every
@@ -412,8 +425,14 @@ function compileDocument(
       layerColor = 'vec4(1.0, 0.0, 1.0, 1.0)';
     }
     const blendFn = blendFunctionName(layer.blend, handle.sink.diag);
+    const opacityUniform = handle.sink.uniform({
+      name: layerOpacityUniformName(layer.id),
+      type: 'float',
+      paramId: 'opacity',
+      default: layer.opacity,
+    });
     const v = handle.sink.temp('layerComposite');
-    handle.sink.emit(`vec3 ${v} = ${blendFn}(${compositeVar}, (${layerColor}), ${fmtNum(layer.opacity)});`);
+    handle.sink.emit(`vec3 ${v} = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityUniform});`);
     compositeVar = v;
   }
 

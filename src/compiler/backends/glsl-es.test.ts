@@ -5,7 +5,7 @@ import { emptyLayer } from '../../model/factory';
 import { registerStarterNodes } from '../../nodes/definitions';
 import { nodes } from '../../nodes/registry';
 import { backends } from '../backend';
-import { coerceGlsl, glslEsBackend, glslLiteral } from './glsl-es';
+import { coerceGlsl, glslEsBackend, glslLiteral, layerOpacityUniformName } from './glsl-es';
 
 // Import for the registration side effect (`backends.register(glslEsBackend)`)
 // so `backends.get('glsl-es')` resolves the same singleton the app uses.
@@ -191,6 +191,54 @@ describe('glslEsBackend.compileDocument', () => {
     expect(normalCallSites).toHaveLength(2);
     expect(program.diagnostics.some((d) => d.level === 'warning' && d.message.includes('custom'))).toBe(
       true,
+    );
+  });
+
+  // Regression guard for the known issue this task fixed: opacity used to be
+  // baked in as a GLSL literal (`fmtNum(layer.opacity)`), which meant
+  // dragging a layer's opacity slider forced a recompile. It must now be a
+  // uniform, exactly like every `NodeParam`-backed value (`UniformSpec.paramId`).
+  it("declares each layer's opacity as a uniform instead of a compile-time literal", () => {
+    const doc = twoLayerDoc();
+    const overlayId = doc.layerStack.layers[1].id;
+    const overlayOpacityName = layerOpacityUniformName(overlayId);
+    const program = glslEsBackend.compileDocument(doc);
+
+    const uniform = program.uniforms.find((u) => u.name === overlayOpacityName);
+    expect(uniform).toEqual({
+      name: overlayOpacityName,
+      type: 'float',
+      paramId: 'opacity',
+      default: 0.5,
+    });
+    expect(program.fragment).toContain(`uniform float ${overlayOpacityName};`);
+    // The blend call site references the uniform, not a baked `0.5` literal.
+    const blendLine = (program.fragment ?? '')
+      .split('\n')
+      .find((line) => line.includes('= sg_blendMultiply('));
+    expect(blendLine).toContain(overlayOpacityName);
+    expect(blendLine).not.toMatch(/,\s*0\.5\)/);
+  });
+
+  it("re-declaring the same document produces the identical fragment when only opacity's uniform default changes", () => {
+    // Two different opacity values compile to the SAME shader text modulo the
+    // uniform's `default` — proving opacity never perturbs program topology.
+    const a = twoLayerDoc();
+    const b = twoLayerDoc();
+    // Match both layers' random ids so only opacity differs.
+    b.layerStack.layers[0].id = a.layerStack.layers[0].id;
+    b.layerStack.layers[1].id = a.layerStack.layers[1].id;
+    b.layerStack.layers[1].opacity = 0.9;
+
+    const programA = glslEsBackend.compileDocument(a);
+    const programB = glslEsBackend.compileDocument(b);
+
+    expect(programA.fragment).toBe(programB.fragment);
+    expect(programA.uniforms.find((u) => u.name === layerOpacityUniformName(a.layerStack.layers[1].id))?.default).toBe(
+      0.5,
+    );
+    expect(programB.uniforms.find((u) => u.name === layerOpacityUniformName(b.layerStack.layers[1].id))?.default).toBe(
+      0.9,
     );
   });
 });
