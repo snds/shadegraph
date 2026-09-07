@@ -43,6 +43,7 @@ function createCompileErrorBridge(): (message: string | null) => void {
 export function MainViewer() {
   const doc = useEditorStore((s) => s.doc);
   const viewerSource = useEditorStore((s) => s.viewerSource);
+  const target = useEditorStore((s) => s.target);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<PreviewRenderer | null>(null);
@@ -87,6 +88,15 @@ export function MainViewer() {
   useEffect(() => {
     rendererRef.current?.setViewerSource(viewerSource);
   }, [viewerSource]);
+
+  // Keep the renderer's compile target (glsl-es / wgsl) current. Note:
+  // `PreviewRenderer` has one shared `target` for both the main viewer and
+  // its thumbnail host (see `setDocument`/`setTarget` in `renderer.ts`), so
+  // this also switches what per-node thumbnails compile with — there is no
+  // separate thumbnail-only target knob to hold thumbnails on glsl-es.
+  useEffect(() => {
+    rendererRef.current?.setTarget(target);
+  }, [target]);
 
   // Canvas backing-store size must match its CSS box in device pixels, or
   // the render looks blurry/stretched; a ResizeObserver keeps it correct

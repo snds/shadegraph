@@ -34,7 +34,7 @@ import { makeEdgeId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
 import type { PreviewScheduler, ViewerSource } from '../preview/scheduler';
-import type { CompiledProgram } from '../compiler/backend';
+import type { CompiledProgram, TargetLang } from '../compiler/backend';
 
 // ── Selectors (pure, reusable by any pane) ─────────────────────────────────
 
@@ -130,6 +130,11 @@ export interface EditorStore {
    *  `setViewerSource`. Transient editor state: never serialized. */
   viewerSource: ViewerSource;
   setViewerSource: (src: ViewerSource) => void;
+  /** The compile target (backend) the main viewer renders with. `MainViewer`
+   *  forwards every change to the renderer via `setTarget`. Transient editor
+   *  state, same treatment as `viewerSource`: never serialized. */
+  target: TargetLang;
+  setTarget: (target: TargetLang) => void;
   /** The SAME `CompiledProgram` the renderer just bound (or attempted to
    *  bind) to the GPU for `viewerSource` — set by `MainViewer`'s `onCompiled`
    *  bridge, never re-derived. Powers the code panel (source + click-to-
@@ -182,6 +187,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   viewerSource: { kind: 'document' },
   setViewerSource(src) {
     set({ viewerSource: src });
+  },
+  target: 'glsl-es',
+  setTarget(target) {
+    set({ target });
   },
   compiledProgram: null,
   setCompiledProgram(program) {

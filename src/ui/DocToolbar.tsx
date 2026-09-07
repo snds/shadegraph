@@ -17,6 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import type { TargetLang } from '../compiler/backend';
 import { notify } from './notice';
 import {
   clearAutosave,
@@ -39,6 +40,8 @@ function shortTime(iso: string): string {
 export function DocToolbar() {
   const name = useEditorStore((s) => s.doc.name);
   const rig = useEditorStore((s) => s.doc.previewRig);
+  const target = useEditorStore((s) => s.target);
+  const setTarget = useEditorStore((s) => s.setTarget);
   const loadDocument = useEditorStore((s) => s.loadDocument);
   const newDocument = useEditorStore((s) => s.newDocument);
   const renameDocument = useEditorStore((s) => s.renameDocument);
@@ -143,6 +146,16 @@ export function DocToolbar() {
       />
 
       <span className="sg-hint">rig: {rig}</span>
+
+      <select
+        className="sg-select sg-target"
+        aria-label="Compile target"
+        value={target}
+        onChange={(e) => setTarget(e.target.value as TargetLang)}
+      >
+        <option value="glsl-es">GLSL ES</option>
+        <option value="wgsl">WGSL</option>
+      </select>
 
       {restoredAt !== null && (
         <span className="sg-restored" role="status">
