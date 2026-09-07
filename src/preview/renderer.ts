@@ -24,6 +24,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial, WebGPURenderer, type Node as TslNode } from 'three/webgpu';
+import { uniform, uv, wgslFn } from 'three/tsl';
 
 import type { PreviewRig, ScalarOrVector, ShaderDocument, SocketType } from '../model/document';
 import {
@@ -36,6 +38,8 @@ import {
 // (idempotent — `Map.set`), and is also where `topology.ts` imports the
 // layer-opacity uniform-naming convention from.
 import '../compiler/backends/glsl-es';
+// Side effect: registers `wgslBackend`, same pattern as glsl-es above.
+import '../compiler/backends/wgsl';
 import type { PreviewScheduler, ThumbnailRequest, ViewerSource } from './scheduler';
 import { viewerSourceToCompileOptions } from './scheduler';
 import { collectUniformValues, sameUniformValue, topologySignature } from './topology';
@@ -451,18 +455,198 @@ export function createThreeGpuBinding(renderer: THREE.WebGLRenderer): GpuBinding
   return { bind, setUniformValue, resize, dispose };
 }
 
+// ── Real GPU binding: three.js WebGPURenderer + a WGSL `wgslFn` node material ─
+// WebGPU's NodeMaterial pipeline has no `RawShaderMaterial` equivalent (there
+// is no way to hand a WebGPU material a complete, self-contained shader module
+// string the way `RawShaderMaterial` takes raw GLSL) — instead, three's TSL
+// `wgslFn(code)` wraps a raw WGSL function as a callable node-graph primitive
+// (see `wgsl.ts`'s header comment on why `sg_main` must be the first thing in
+// `compiled.module`). Calling that wrapped function with one TSL node per
+// `sg_main` parameter — `uv()` for the primary UV, then one `uniform(...)`
+// node per declared uniform, in the exact order `compiled.uniforms` declares
+// them — produces the node this binding assigns to `MeshBasicNodeMaterial
+// .colorNode`, which is WebGPU's equivalent of "this expression IS the pixel
+// color", parallel to `RawShaderMaterial`'s `gl_FragColor`.
+function createThreeWebGpuBinding(renderer: WebGPURenderer): GpuBinding {
+  const scene = new THREE.Scene();
+  const clock = new THREE.Clock();
+
+  let mesh: THREE.Mesh | null = null;
+  let material: MeshBasicNodeMaterial | null = null;
+  let camera: THREE.Camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  let spin = false;
+  // Every uniform node this binding currently has live, keyed by the SAME
+  // `UniformSpec.name` the compiled program declared — `setUniformValue`
+  // looks a name up here exactly like `createThreeGpuBinding`'s
+  // `material.uniforms[name]` does for the WebGL path.
+  let uniformNodes = new Map<string, ReturnType<typeof uniform>>();
+
+  function bind(compiled: CompiledProgram, rig: PreviewRig): void {
+    if (!compiled.module) return;
+
+    const nextUniformNodes = new Map<string, ReturnType<typeof uniform>>();
+    const args: TslNode[] = [uv()];
+    for (const spec of compiled.uniforms) {
+      const node = uniform(toThreeUniformValue(spec.type, (spec.default as ScalarOrVector | string) ?? 0));
+      nextUniformNodes.set(spec.name, node);
+      args.push(node);
+    }
+    uniformNodes = nextUniformNodes;
+
+    const colorNode = (wgslFn(compiled.module) as (...params: TslNode[]) => TslNode)(...args);
+    const setup = rigSetup(rig);
+    const nextMaterial = new MeshBasicNodeMaterial();
+    nextMaterial.colorNode = colorNode;
+    nextMaterial.side = setup.side;
+
+    if (mesh) {
+      scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    mesh = new THREE.Mesh(setup.geometry, nextMaterial);
+    scene.add(mesh);
+    material = nextMaterial;
+    camera = setup.camera;
+    spin = setup.spin;
+
+    const size = new THREE.Vector2();
+    renderer.getSize(size);
+    if (camera instanceof THREE.PerspectiveCamera && size.y > 0) {
+      camera.aspect = size.x / size.y;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  function setUniformValue(name: string, type: SocketType, value: ScalarOrVector | string): void {
+    const node = uniformNodes.get(name);
+    if (!node) return;
+    node.value = toThreeUniformValue(type, value);
+  }
+
+  function resize(width: number, height: number): void {
+    renderer.setSize(width, height, false);
+    if (camera instanceof THREE.PerspectiveCamera && height > 0) {
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  // `WebGPURenderer.render()` is a thin sync wrapper: it warns and defers to
+  // `renderAsync()` internally when the device hasn't finished its async
+  // `init()` yet, rather than throwing — so a frame that lands before init
+  // resolves just quietly renders nothing that tick instead of crashing the
+  // loop.
+  function frame(): void {
+    if (mesh && material) {
+      const uTimeNode = uniformNodes.get('uTime');
+      if (uTimeNode) uTimeNode.value = clock.getElapsedTime();
+      if (spin) mesh.rotation.y += 0.0025;
+      renderer.render(scene, camera);
+    }
+    rafHandle = requestAnimationFrame(frame);
+  }
+  let rafHandle = requestAnimationFrame(frame);
+
+  function dispose(): void {
+    cancelAnimationFrame(rafHandle);
+    if (mesh) {
+      scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    renderer.dispose();
+  }
+
+  return { bind, setUniformValue, resize, dispose };
+}
+
+// ── Dual-backend routing ─────────────────────────────────────────────────────
+// A WebGL2 context and a WebGPU context can never share one `<canvas>` (once
+// a canvas's rendering context type is established, the browser refuses to
+// hand out a context of a different type for that canvas's lifetime) — so
+// switching `PreviewRenderer.setTarget('wgsl')` cannot simply rebind the SAME
+// canvas the way switching rigs/documents does. Instead this binding owns the
+// original (GLSL/WebGL) canvas plus a second, lazily-created WGSL/WebGPU
+// canvas stacked in the same DOM slot, and shows/hides whichever one the
+// active `CompiledProgram.target` needs — `MainViewer.tsx` itself stays
+// completely unaware that a second canvas exists.
+function createDualBackendGpuBinding(
+  glCanvas: HTMLCanvasElement,
+  glBinding: GpuBinding,
+): GpuBinding {
+  let wgpuBinding: GpuBinding | null = null;
+  let wgpuCanvas: HTMLCanvasElement | null = null;
+  let active: TargetLang = 'glsl-es';
+  let lastSize: { width: number; height: number } | null = null;
+
+  function ensureWgpuBinding(): GpuBinding {
+    if (!wgpuBinding) {
+      const canvas = document.createElement('canvas');
+      canvas.className = glCanvas.className;
+      canvas.style.display = 'none';
+      glCanvas.insertAdjacentElement('afterend', canvas);
+      wgpuCanvas = canvas;
+      const renderer = new WebGPURenderer({ canvas, antialias: true });
+      renderer.setClearColor(new THREE.Color(0x000000), 1);
+      wgpuBinding = createThreeWebGpuBinding(renderer);
+      if (lastSize) wgpuBinding.resize(lastSize.width, lastSize.height);
+    }
+    return wgpuBinding;
+  }
+
+  function activate(target: TargetLang): void {
+    if (target === active) return;
+    active = target;
+    glCanvas.style.display = target === 'glsl-es' ? 'block' : 'none';
+    if (wgpuCanvas) wgpuCanvas.style.display = target === 'wgsl' ? 'block' : 'none';
+  }
+
+  return {
+    bind(compiled, rig) {
+      if (compiled.target === 'wgsl') {
+        activate('wgsl');
+        ensureWgpuBinding().bind(compiled, rig);
+      } else {
+        activate('glsl-es');
+        glBinding.bind(compiled, rig);
+      }
+    },
+    setUniformValue(name, type, value) {
+      const target = active === 'wgsl' ? wgpuBinding : glBinding;
+      target?.setUniformValue(name, type, value);
+    },
+    resize(width, height) {
+      lastSize = { width, height };
+      glBinding.resize(width, height);
+      wgpuBinding?.resize(width, height);
+    },
+    dispose() {
+      glBinding.dispose();
+      wgpuBinding?.dispose();
+      wgpuCanvas?.remove();
+    },
+  };
+}
+
 /** The one shared renderer for BOTH the main viewer and every per-node
  *  thumbnail (AGENTS.md: "One shared renderer... Dirty + visible only."): a
  *  single `THREE.WebGLRenderer`/WebGL2 context on `canvas` backs a real
  *  `GpuBinding` (the main viewer's continuous render loop) AND a
  *  `ThumbnailScheduler` (pooled offscreen render targets, dirty+visible+
- *  budget gated) — never two contexts. */
+ *  budget gated) — never two contexts. `setTarget('wgsl')` is handled by
+ *  `createDualBackendGpuBinding`, which owns a SECOND, lazily-created
+ *  WebGPU canvas of its own (see that function's header) — the thumbnail
+ *  scheduler is unaffected and keeps using the original WebGL context
+ *  regardless of the main viewer's active target (per-node thumbnails on the
+ *  `wgsl` target are a known, separate gap — see this task's report). */
 export function createPreviewRenderer(
   canvas: HTMLCanvasElement,
   deps?: PreviewRendererDeps,
 ): PreviewRenderer {
   const renderer = createThreeRenderer(canvas);
-  const binding = createThreeGpuBinding(renderer);
+  const glBinding = createThreeGpuBinding(renderer);
   const thumbnails = createThumbnailScheduler(renderer);
+  const binding = createDualBackendGpuBinding(canvas, glBinding);
   return new PreviewRenderer(binding, deps, thumbnails);
 }
