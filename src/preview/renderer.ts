@@ -594,6 +594,27 @@ function createDualBackendGpuBinding(
       wgpuCanvas = canvas;
       const renderer = new WebGPURenderer({ canvas, antialias: true });
       renderer.setClearColor(new THREE.Color(0x000000), 1);
+      // Both renderers default `outputColorSpace` to `SRGBColorSpace`, but
+      // only WebGPU's actually enforces it: `WebGPURenderer` runs a full-
+      // screen linear→sRGB post-processing pass keyed off
+      // `renderer.outputColorSpace` alone (see three's `_getFrameBufferTarget`
+      // / `currentColorSpace`), independent of what the bound material's
+      // `colorNode` computes. `WebGLRenderer` + `RawShaderMaterial` (the
+      // glsl-es path, below) instead EMBEDS a `linearToOutputTexel` GLSL
+      // function that our compiled fragment source never calls — so on WebGL
+      // the "conversion" is dead code and the glsl-es path's compiled color
+      // values reach the screen raw/uncorrected. Left at its SRGBColorSpace
+      // default, WebGPU would sRGB-encode those same raw values a second time
+      // (double-managed, since the compiler applies none of its own), which
+      // is exactly the golden-yellow-vs-orange-brown tone mismatch this fixes.
+      // Setting `outputColorSpace` to `LinearSRGBColorSpace` (linear ==
+      // working space) makes `useColorSpace` false, so the post-process pass
+      // is skipped and WebGPU reaches the screen just as raw as glsl-es does.
+      // Do NOT delete this thinking the values "already look wrong" without
+      // it — that's the point being fixed. If color management is ever added
+      // project-wide, it belongs in the compiler/document model (both
+      // backends' compiled output), not as a per-renderer flag here.
+      renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
       wgpuBinding = createThreeWebGpuBinding(renderer);
       if (lastSize) wgpuBinding.resize(lastSize.width, lastSize.height);
     }
