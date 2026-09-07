@@ -127,7 +127,12 @@ export class PreviewRenderer implements PreviewScheduler {
   setDocument(doc: ShaderDocument): void {
     const prevDoc = this.doc;
     this.doc = doc;
-    this.thumbnails?.onDocument(doc, this.target, diffChangedNodeIds(prevDoc, doc));
+    // Thumbnails only ever have a WebGL2-bound GPU host (see
+    // `createPreviewRenderer`'s header comment) — always compile them
+    // `glsl-es`, regardless of what the main viewer's `this.target` is, so a
+    // main-viewer switch to `wgsl` doesn't silently drag thumbnail compiles
+    // along with it.
+    this.thumbnails?.onDocument(doc, 'glsl-es', diffChangedNodeIds(prevDoc, doc));
     this.reconcile();
   }
 
@@ -605,8 +610,14 @@ function createDualBackendGpuBinding(
   return {
     bind(compiled, rig) {
       if (compiled.target === 'wgsl') {
-        activate('wgsl');
+        // `ensureWgpuBinding()` must run first: on the very first switch it
+        // lazily creates `wgpuCanvas`, and `activate('wgsl')` only flips a
+        // canvas's `display` if it already exists — calling `activate`
+        // before the canvas exists leaves it stuck at `display:none` forever
+        // (the early-return guard means `activate('wgsl')` never runs again
+        // while already active).
         ensureWgpuBinding().bind(compiled, rig);
+        activate('wgsl');
       } else {
         activate('glsl-es');
         glBinding.bind(compiled, rig);
