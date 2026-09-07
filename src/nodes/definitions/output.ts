@@ -32,6 +32,22 @@ export const outputSurface: NodeDefinition = {
       ctx.emit(`gl_FragColor = ${v};`);
       return v;
     },
+    // No `gl_FragColor`-equivalent side effect here (unlike glsl-es): this
+    // node's emitter runs once per layer inside `wgsl.ts`'s `compileDocument`
+    // composite loop, all sharing ONE `sg_main` body — an actual WGSL
+    // `return` statement here would exit the function after the first layer
+    // instead of falling through to compositing. The wgsl backend adds the
+    // real final `return` itself (single-graph compile: this expression
+    // directly; composite: the blended result). See the wgsl backend's task
+    // report for the full reconciliation notes.
+    'wgsl': (node, ctx) => {
+      const baseColor = ctx.input(node.id, 'baseColor');
+      const emissive = ctx.input(node.id, 'emissive');
+      const opacity = ctx.input(node.id, 'opacity');
+      const v = ctx.temp('surface');
+      ctx.emit(`let ${v}: vec4<f32> = vec4<f32>(${baseColor} + ${emissive}, ${opacity});`);
+      return v;
+    },
   },
 };
 

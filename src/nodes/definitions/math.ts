@@ -24,6 +24,13 @@ export const mathAdd: NodeDefinition = {
       ctx.emit(`float ${v} = ${a} + ${b};`);
       return v;
     },
+    'wgsl': (node, ctx) => {
+      const a = ctx.input(node.id, 'a');
+      const b = ctx.input(node.id, 'b');
+      const v = ctx.temp('add');
+      ctx.emit(`let ${v}: f32 = ${a} + ${b};`);
+      return v;
+    },
   },
 };
 
@@ -43,6 +50,13 @@ export const mathMul: NodeDefinition = {
       const b = ctx.input(node.id, 'b');
       const v = ctx.temp('mul');
       ctx.emit(`float ${v} = ${a} * ${b};`);
+      return v;
+    },
+    'wgsl': (node, ctx) => {
+      const a = ctx.input(node.id, 'a');
+      const b = ctx.input(node.id, 'b');
+      const v = ctx.temp('mul');
+      ctx.emit(`let ${v}: f32 = ${a} * ${b};`);
       return v;
     },
   },
@@ -70,6 +84,14 @@ export const mathMix: NodeDefinition = {
       const t = ctx.input(node.id, 't');
       const v = ctx.temp('mix');
       ctx.emit(`vec3 ${v} = mix(${a}, ${b}, clamp(${t}, 0.0, 1.0));`);
+      return v;
+    },
+    'wgsl': (node, ctx) => {
+      const a = ctx.input(node.id, 'a');
+      const b = ctx.input(node.id, 'b');
+      const t = ctx.input(node.id, 't');
+      const v = ctx.temp('mix');
+      ctx.emit(`let ${v}: vec3<f32> = mix(${a}, ${b}, clamp(${t}, 0.0, 1.0));`);
       return v;
     },
   },

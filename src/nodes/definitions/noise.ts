@@ -39,5 +39,23 @@ export const noiseFbm: NodeDefinition = {
       );
       return v;
     },
+    'wgsl': (node, ctx) => {
+      const uv = ctx.input(node.id, 'uv');
+      const frequency = paramUniform(ctx, node, 'frequency', 'float', 2);
+      const lacunarity = paramUniform(ctx, node, 'lacunarity', 'float', 2);
+      const gain = paramUniform(ctx, node, 'gain', 'float', 0.5);
+      const seed = paramUniform(ctx, node, 'seed', 'float', 0);
+      // WGSL for-loops allow a non-constant bound (see `sg_fbm` in the wgsl
+      // backend's prelude), but `octaves` is still baked as a compile-time
+      // literal here — same node-level tradeoff as glsl-es, kept for parity
+      // (a live octave slider would need to become a uniform in BOTH
+      // backends, which is out of this task's scope).
+      const octaves = Math.max(1, Math.round(Number(paramValue(node, 'octaves', 4))));
+      const v = ctx.temp('fbm');
+      ctx.emit(
+        `let ${v}: f32 = sg_fbm(${uv} * ${frequency} + vec2<f32>(${seed}), ${octaves}, ${lacunarity}, ${gain});`,
+      );
+      return v;
+    },
   },
 };

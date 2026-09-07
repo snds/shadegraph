@@ -27,6 +27,13 @@ export const inputUv: NodeDefinition = {
       ctx.emit(`vec2 ${v} = vUv * ${tiling} + ${offset};`);
       return v;
     },
+    'wgsl': (node, ctx) => {
+      const tiling = paramUniform(ctx, node, 'tiling', 'vec2', [1, 1]);
+      const offset = paramUniform(ctx, node, 'offset', 'vec2', [0, 0]);
+      const v = ctx.temp('uv');
+      ctx.emit(`let ${v}: vec2<f32> = vUv * ${tiling} + ${offset};`);
+      return v;
+    },
   },
 };
 
@@ -45,6 +52,13 @@ export const inputTime: NodeDefinition = {
       const time = ctx.uniform({ name: 'uTime', type: 'float', default: 0 });
       const v = ctx.temp('time');
       ctx.emit(`float ${v} = ${time} * ${speed};`);
+      return v;
+    },
+    'wgsl': (node, ctx) => {
+      const speed = paramUniform(ctx, node, 'speed', 'float', 1);
+      const time = ctx.uniform({ name: 'uTime', type: 'float', default: 0 });
+      const v = ctx.temp('time');
+      ctx.emit(`let ${v}: f32 = ${time} * ${speed};`);
       return v;
     },
   },
