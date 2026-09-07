@@ -14,7 +14,7 @@
 // actually dirty.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 
 import type { Diagnostic } from '../../compiler/backend';
@@ -133,12 +133,30 @@ function SocketRow({ socket, direction }: { socket: SocketSpec; direction: 'in' 
  *  the error's color. Mirrors `Diagnostic['level']`. */
 const LEVEL_RANK: Record<Diagnostic['level'], number> = { error: 2, warning: 1, info: 0 };
 
+/** Stable empty-array reference so "no diagnostics" doesn't allocate a new
+ *  array (and thus a new reference) on every render. */
+const NO_DIAGNOSTICS: Diagnostic[] = [];
+
 /** This node's own diagnostics from the last real compile (`store.compiledProgram`
  *  — the SAME compile the renderer bound, never re-derived). A diagnostic with
  *  no `nodeId` (e.g. a whole-document cycle) is not this card's concern: it
- *  already surfaces via `NoticeToast` (`store.lastError`). */
+ *  already surfaces via `NoticeToast` (`store.lastError`).
+ *
+ *  The Zustand selector below only reads `compiledProgram` itself — a
+ *  reference that's stable between renders and only replaced on a real
+ *  recompile (see `PreviewRenderer`'s `onCompiled` callback) — never a
+ *  freshly `.filter()`-ed array. Filtering happens in a `useMemo`, keyed on
+ *  that stable reference plus `nodeId`, so this hook returns a referentially
+ *  stable value across renders when nothing relevant changed. A selector
+ *  that allocates a new array/object every call defeats Zustand's
+ *  `useSyncExternalStore`-based change detection and can trigger an infinite
+ *  re-render loop. */
 function useNodeDiagnostics(nodeId: string): Diagnostic[] {
-  return useEditorStore((s) => s.compiledProgram?.diagnostics.filter((d) => d.nodeId === nodeId) ?? []);
+  const compiledProgram = useEditorStore((s) => s.compiledProgram);
+  return useMemo(
+    () => compiledProgram?.diagnostics.filter((d) => d.nodeId === nodeId) ?? NO_DIAGNOSTICS,
+    [compiledProgram, nodeId],
+  );
 }
 
 function NodeDiagnosticBadge({ nodeId }: { nodeId: string }) {
