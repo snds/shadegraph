@@ -309,6 +309,84 @@ describe('layers', () => {
   });
 });
 
+describe('masks', () => {
+  it('adds an empty mask graph and switches the canvas into editing it', () => {
+    const layerId = activeLayer(store().doc).id;
+
+    store().addMaskToLayer(layerId);
+
+    const layer = activeLayer(store().doc);
+    expect(layer.maskGraph?.nodes.map((n) => n.type)).toEqual(['output.mask']);
+    expect(store().editingTarget).toEqual({ kind: 'mask', layerId });
+    expect(activeGraph(store().doc)).toBe(layer.maskGraph);
+  });
+
+  it('routes graph mutations to the mask while editing it, leaving the main graph untouched', () => {
+    const layerId = activeLayer(store().doc).id;
+    const mainGraphBefore = activeLayer(store().doc).graph;
+
+    store().addMaskToLayer(layerId);
+    const maskNode = add('test.uv');
+
+    const layer = activeLayer(store().doc);
+    expect(layer.maskGraph?.nodes.map((n) => n.id)).toContain(maskNode);
+    expect(layer.graph).toBe(mainGraphBefore);
+  });
+
+  it('exits back to the main graph and clears selection', () => {
+    const layerId = activeLayer(store().doc).id;
+    store().addMaskToLayer(layerId);
+    store().selectNodes([add('test.uv')]);
+
+    store().exitMaskEditing();
+
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+    expect(store().selectedNodeIds).toEqual([]);
+    expect(activeGraph(store().doc)).toBe(activeLayer(store().doc).graph);
+  });
+
+  it('re-enters an existing mask via enterMaskEditing', () => {
+    const layerId = activeLayer(store().doc).id;
+    store().addMaskToLayer(layerId);
+    store().exitMaskEditing();
+
+    store().enterMaskEditing(layerId);
+
+    expect(store().editingTarget).toEqual({ kind: 'mask', layerId });
+  });
+
+  it('refuses to enter mask editing for a layer with no mask yet', () => {
+    const layerId = activeLayer(store().doc).id;
+
+    store().enterMaskEditing(layerId);
+
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+    expect(store().lastError).toMatch(/no mask/);
+  });
+
+  it('removing the mask being edited falls back to the main graph', () => {
+    const layerId = activeLayer(store().doc).id;
+    store().addMaskToLayer(layerId);
+
+    store().removeMaskFromLayer(layerId);
+
+    expect(activeLayer(store().doc).maskGraph).toBeUndefined();
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+    expect(activeGraph(store().doc)).toBe(activeLayer(store().doc).graph);
+  });
+
+  it('switching the active layer exits mask editing', () => {
+    const base = activeLayer(store().doc).id;
+    const second = store().addLayer('Crust') as string;
+    store().setActiveLayer(base);
+    store().addMaskToLayer(base);
+
+    store().setActiveLayer(second);
+
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+  });
+});
+
 describe('document lifecycle', () => {
   it('bumps meta.updated on every mutation', async () => {
     const { created, updated: before } = store().doc.meta;
