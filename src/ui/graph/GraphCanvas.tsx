@@ -85,6 +85,41 @@ const nodeTypes: NodeTypes = { [SHADER_NODE_TYPE]: ShaderNodeCard, [GROUP_NODE_T
  *  fills the entire canvas. */
 const FIT_VIEW = { maxZoom: 1, padding: 0.25 };
 
+/** A partial update to a `NodeGroup`'s bounds, as gathered from a frame's
+ *  `position`/`dimensions` NodeChanges in `onNodesChange` below. */
+export interface GroupBoundsPatch {
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}
+
+/** Whether `patch` actually moves any of `bounds`' fields. Exported so the
+ *  fix for the "every node stuck at visibility:hidden once a group exists"
+ *  bug is unit-testable without a browser: React Flow's own node-adoption
+ *  cycle resets every node's measured dimensions on any store update
+ *  (`toFlowGroups`/`toFlowNodes` build fresh node objects every render, so
+ *  React Flow's identity-based `checkEquality` always misses), which makes
+ *  the frame's ResizeObserver report a "dimensions changed" NodeChange whose
+ *  values are IDENTICAL to what is already stored. Committing that
+ *  unconditionally re-triggers the very store update that caused the reset —
+ *  an infinite measure -> write -> reset -> measure loop that never lets
+ *  React Flow settle any node (shared `nodes` array, one `<ReactFlow>`
+ *  instance) at `visibility: visible`. Gating the write on an actual
+ *  difference breaks the loop while leaving genuine drags/resizes (which do
+ *  produce a real diff) untouched. */
+export function groupBoundsChanged(
+  bounds: { x: number; y: number; w: number; h: number },
+  patch: GroupBoundsPatch,
+): boolean {
+  return (
+    (patch.x !== undefined && patch.x !== bounds.x) ||
+    (patch.y !== undefined && patch.y !== bounds.y) ||
+    (patch.w !== undefined && patch.w !== bounds.w) ||
+    (patch.h !== undefined && patch.h !== bounds.h)
+  );
+}
+
 interface PalettePosition {
   /** Client coords, for placing the panel. */
   client: { x: number; y: number };
@@ -236,9 +271,13 @@ function GraphCanvasInner() {
         }
       }
 
+      // Only commit a patch that actually moves the needle — see
+      // `groupBoundsChanged`'s doc comment for why an unconditional write
+      // here used to hang the whole canvas at `visibility: hidden` as soon
+      // as any group existed.
       for (const [groupId, patch] of groupPatches) {
         const bounds = findGroup(graphRef.current, groupId)?.bounds;
-        if (bounds) setGroupBounds(groupId, { ...bounds, ...patch });
+        if (bounds && groupBoundsChanged(bounds, patch)) setGroupBounds(groupId, { ...bounds, ...patch });
       }
       for (const groupId of removedGroupIds) removeGroup(groupId);
       if (groupSelection) setSelectedGroupIds([...groupSelection]);
