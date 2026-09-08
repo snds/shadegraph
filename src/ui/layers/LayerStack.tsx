@@ -36,6 +36,11 @@ export function LayerStack() {
   const addLayer = useEditorStore((s) => s.addLayer);
   const removeLayer = useEditorStore((s) => s.removeLayer);
   const reorderLayer = useEditorStore((s) => s.reorderLayer);
+  const editingTarget = useEditorStore((s) => s.editingTarget);
+  const addMaskToLayer = useEditorStore((s) => s.addMaskToLayer);
+  const removeMaskFromLayer = useEditorStore((s) => s.removeMaskFromLayer);
+  const enterMaskEditing = useEditorStore((s) => s.enterMaskEditing);
+  const exitMaskEditing = useEditorStore((s) => s.exitMaskEditing);
 
   // When any layer is soloed, only soloed layers composite — so the panel must
   // show the other rows as inert, or the enabled toggles look like they lie.
@@ -69,13 +74,19 @@ export function LayerStack() {
             onPatch={setLayerProp}
             onMove={reorderLayer}
             onRemove={removeLayer}
+            editingMask={editingTarget.kind === 'mask' && editingTarget.layerId === layer.id}
+            onAddMask={addMaskToLayer}
+            onEditMask={enterMaskEditing}
+            onExitMask={exitMaskEditing}
+            onRemoveMask={removeMaskFromLayer}
           />
         ))}
       </ul>
 
       <p className="sg-layers__legend">
         Top of the stack composites last. <b>out</b> = in the compiled output,{' '}
-        <b>prev</b> = drawn in the editor preview, <b>solo</b> = only soloed layers composite.
+        <b>prev</b> = drawn in the editor preview, <b>solo</b> = only soloed layers composite,{' '}
+        <b>mask</b> = dive in to edit this layer's mask graph.
       </p>
     </aside>
   );
@@ -94,6 +105,17 @@ interface LayerRowProps {
   onPatch: (id: string, patch: Partial<Omit<ShaderLayer, 'id' | 'graph'>>) => void;
   onMove: (id: string, direction: StackDirection) => void;
   onRemove: (id: string) => void;
+  /** Whether the canvas is currently dived into THIS layer's mask graph. */
+  editingMask: boolean;
+  /** Give this layer an empty mask and start editing it (no-op if it already
+   *  has one — the mask button below handles enter/exit for that case). */
+  onAddMask: (id: string) => void;
+  /** Dive into an existing mask graph. */
+  onEditMask: (id: string) => void;
+  /** Return to the layer's main graph (used when toggling off `editingMask`). */
+  onExitMask: () => void;
+  /** Delete this layer's mask graph entirely. */
+  onRemoveMask: (id: string) => void;
 }
 
 function LayerRow({
@@ -107,8 +129,14 @@ function LayerRow({
   onPatch,
   onMove,
   onRemove,
+  editingMask,
+  onAddMask,
+  onEditMask,
+  onExitMask,
+  onRemoveMask,
 }: LayerRowProps) {
   const nodeCount = layer.graph.nodes.length;
+  const hasMask = !!layer.maskGraph;
 
   // Buffered draft, same pattern as the document name field in `DocToolbar`:
   // the field only diverges from the store while it has focus, so an
@@ -214,6 +242,45 @@ function LayerRow({
           name={layer.name}
           onToggle={() => onPatch(layer.id, { soloed: !layer.soloed })}
         />
+        <button
+          type="button"
+          className="sg-layers__toggle sg-layers__mask"
+          data-on={hasMask}
+          data-editing={editingMask || undefined}
+          aria-pressed={editingMask}
+          aria-label={
+            !hasMask
+              ? `Add a mask to ${layer.name}`
+              : editingMask
+                ? `Stop editing ${layer.name}'s mask`
+                : `Edit ${layer.name}'s mask`
+          }
+          title={
+            !hasMask
+              ? 'Add a mask (multiplies a grayscale graph result into this layer per-pixel)'
+              : editingMask
+                ? "Back to this layer's main graph"
+                : "Edit this layer's mask graph"
+          }
+          onClick={() => {
+            if (!hasMask) onAddMask(layer.id);
+            else if (editingMask) onExitMask();
+            else onEditMask(layer.id);
+          }}
+        >
+          {hasMask ? 'mask' : '+ mask'}
+        </button>
+        {hasMask ? (
+          <button
+            type="button"
+            className="sg-layers__maskRemove"
+            onClick={() => onRemoveMask(layer.id)}
+            aria-label={`Remove ${layer.name}'s mask`}
+            title="Remove this layer's mask"
+          >
+            ✕
+          </button>
+        ) : null}
         <button
           type="button"
           className="sg-layers__remove"

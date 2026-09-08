@@ -73,6 +73,19 @@
 .sg-layers__toggle:hover { color: var(--sg-text); }
 .sg-layers__toggle[data-on='true'] { color: #06121f; background: var(--sg-accent); border-color: var(--sg-accent); }
 
+/* Mask control: dim "+ mask" when absent, accented once present, and a
+   stronger outline while its graph is the one currently open in the canvas
+   (see `GraphCanvas.tsx`'s breadcrumb, which shows the same state). */
+.sg-layers__mask[data-editing='true'] {
+  box-shadow: 0 0 0 1px var(--sg-accent);
+}
+
+.sg-layers__maskRemove {
+  font: inherit; font-size: 10px; line-height: 1;
+  color: var(--sg-dim); background: transparent; border: 0; padding: 3px 2px; cursor: pointer;
+}
+.sg-layers__maskRemove:hover { color: var(--sg-danger); }
+
 .sg-layers__remove {
   margin-left: auto; font: inherit; font-size: 11px; line-height: 1;
   color: var(--sg-dim); background: transparent; border: 0; padding: 3px 2px; cursor: pointer;
