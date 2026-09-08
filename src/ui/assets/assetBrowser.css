@@ -1,0 +1,82 @@
+/* ── Asset browser panel ─────────────────────────────────────────────────── */
+/* Bottom-LEFT dock (CodePanel already owns bottom-right), same visual
+   language: fixed toggle + absolutely-positioned flyout panel. */
+.sg-assets-dock { position: fixed; left: 16px; bottom: 16px; z-index: 50; }
+
+.sg-assets-toggle {
+  position: relative;
+  font: inherit; font-size: 11px; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 6px 12px; cursor: pointer;
+}
+.sg-assets-toggle:hover { border-color: var(--sg-accent); color: #fff; }
+.sg-assets-toggle[aria-pressed='true'] { border-color: var(--sg-accent); }
+.sg-assets-toggle__dot {
+  position: absolute; top: -3px; right: -3px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--sg-accent);
+}
+
+.sg-assets-panel {
+  position: absolute; left: 0; bottom: 42px; width: 340px; height: 60vh; max-height: 640px;
+  display: flex; flex-direction: column;
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 55%); overflow: hidden;
+}
+
+.sg-assets-panel__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-bottom: 1px solid var(--sg-line); background: var(--sg-node-head);
+  flex: none;
+}
+.sg-assets-panel__title {
+  font-size: 11px; font-weight: 600; color: var(--sg-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sg-assets-panel__close {
+  font: inherit; font-size: 14px; line-height: 1; color: var(--sg-dim);
+  background: transparent; border: 0; cursor: pointer; padding: 0 2px;
+}
+.sg-assets-panel__close:hover { color: var(--sg-text); }
+
+.sg-assets-panel__body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+.sg-assets-panel__foot {
+  flex: none; padding: 6px 10px; border-top: 1px solid var(--sg-line);
+  display: flex; justify-content: flex-end;
+}
+
+.sg-assets-empty {
+  color: var(--sg-dim); font-size: 11px; padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.sg-assets-error { color: var(--sg-danger); }
+
+.sg-assets-connect, .sg-assets-disconnect {
+  font: inherit; font-size: 11px; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 5px 10px; cursor: pointer; align-self: flex-start;
+}
+.sg-assets-connect:hover, .sg-assets-disconnect:hover { border-color: var(--sg-accent); color: #fff; }
+
+/* Virtualized list: `.sg-assets-list` is the scroll container, `__spacer` is
+   the full (unvirtualized) scrollable height, `__window` holds only the
+   currently-rendered slice, translated into place. */
+.sg-assets-list { flex: 1; overflow: auto; position: relative; }
+.sg-assets-list__spacer { position: relative; }
+.sg-assets-list__window { position: absolute; top: 0; left: 0; right: 0; }
+
+.sg-assets-row {
+  display: flex; align-items: center; gap: 6px; padding-right: 8px;
+  font-size: 11px; color: var(--sg-text); white-space: nowrap; overflow: hidden;
+}
+.sg-assets-row__disclosure {
+  font: inherit; font-size: 9px; width: 14px; flex: none; text-align: center;
+  color: var(--sg-dim); background: transparent; border: 0; cursor: pointer; padding: 0;
+}
+.sg-assets-row__disclosure:hover { color: var(--sg-text); }
+.sg-assets-row__spacer { width: 14px; flex: none; }
+.sg-assets-row__icon { flex: none; width: 16px; text-align: center; color: var(--sg-dim); }
+.sg-assets-row__thumb {
+  flex: none; width: 16px; height: 16px; object-fit: cover; border-radius: 2px;
+  background: var(--sg-node-head);
+}
+.sg-assets-row__name { overflow: hidden; text-overflow: ellipsis; }
