@@ -387,6 +387,110 @@ describe('masks', () => {
   });
 });
 
+describe('groups', () => {
+  it('frames a multi-selection into a new NodeGroup and assigns groupId', () => {
+    const a = add('test.uv');
+    const b = add('test.noise');
+
+    const groupId = store().createGroup([a, b], { x: 0, y: 0, w: 200, h: 200 });
+
+    expect(groupId).not.toBeNull();
+    expect(graph().groups).toEqual([{ id: groupId, title: 'Group', bounds: { x: 0, y: 0, w: 200, h: 200 } }]);
+    expect(graph().nodes.find((n) => n.id === a)?.groupId).toBe(groupId);
+    expect(graph().nodes.find((n) => n.id === b)?.groupId).toBe(groupId);
+  });
+
+  it('refuses to group fewer than two resolvable nodes', () => {
+    const a = add('test.uv');
+
+    expect(store().createGroup([a], { x: 0, y: 0, w: 100, h: 100 })).toBeNull();
+    expect(store().createGroup(['ghost-1', 'ghost-2'], { x: 0, y: 0, w: 100, h: 100 })).toBeNull();
+    expect(store().lastError).toMatch(/at least two/);
+    expect(graph().groups ?? []).toEqual([]);
+  });
+
+  it('renames and recolors a group without touching its members', () => {
+    const a = add('test.uv');
+    const b = add('test.noise');
+    const groupId = store().createGroup([a, b], { x: 0, y: 0, w: 10, h: 10 }) as string;
+
+    store().renameGroup(groupId, '  Terrain inputs  ');
+    store().recolorGroup(groupId, '#ff8800');
+
+    const group = graph().groups?.find((g) => g.id === groupId);
+    expect(group).toMatchObject({ title: 'Terrain inputs', color: '#ff8800' });
+    expect(graph().nodes.find((n) => n.id === a)?.groupId).toBe(groupId);
+  });
+
+  it('reports an error renaming/recoloring an unknown group', () => {
+    store().renameGroup('ghost', 'X');
+    expect(store().lastError).toMatch(/No group "ghost"/);
+
+    store().recolorGroup('ghost', '#fff');
+    expect(store().lastError).toMatch(/No group "ghost"/);
+  });
+
+  it('moves and resizes a group via setGroupBounds', () => {
+    const a = add('test.uv');
+    const b = add('test.noise');
+    const groupId = store().createGroup([a, b], { x: 0, y: 0, w: 10, h: 10 }) as string;
+
+    store().setGroupBounds(groupId, { x: 50, y: 60, w: 300, h: 250 });
+
+    expect(graph().groups?.find((g) => g.id === groupId)?.bounds).toEqual({ x: 50, y: 60, w: 300, h: 250 });
+  });
+
+  it('deletes a group and ungroups its members without deleting the nodes', () => {
+    const a = add('test.uv');
+    const b = add('test.noise');
+    const groupId = store().createGroup([a, b], { x: 0, y: 0, w: 10, h: 10 }) as string;
+
+    store().removeGroup(groupId);
+
+    expect(graph().groups ?? []).toEqual([]);
+    expect(graph().nodes.map((n) => n.id)).toEqual(expect.arrayContaining([a, b]));
+    expect(graph().nodes.find((n) => n.id === a)?.groupId).toBeUndefined();
+    expect(graph().nodes.find((n) => n.id === b)?.groupId).toBeUndefined();
+  });
+
+  it('assigns and clears a node group directly, e.g. from a drag gesture', () => {
+    const a = add('test.uv');
+    const b = add('test.noise');
+    const groupId = store().createGroup([a, b], { x: 0, y: 0, w: 10, h: 10 }) as string;
+
+    store().setNodeGroup(a, undefined);
+    expect(graph().nodes.find((n) => n.id === a)?.groupId).toBeUndefined();
+
+    store().setNodeGroup(a, groupId);
+    expect(graph().nodes.find((n) => n.id === a)?.groupId).toBe(groupId);
+  });
+
+  it('ignores setNodeGroup for an unknown group id', () => {
+    const a = add('test.uv');
+    const before = store().doc;
+
+    store().setNodeGroup(a, 'ghost');
+
+    expect(store().doc).toBe(before);
+  });
+
+  it('does not affect compiled output: a document with groups compiles identically to one without', async () => {
+    const { glslEsBackend } = await import('../compiler/backends/glsl-es');
+    const a = add('test.uv');
+    const b = add('test.noise');
+    store().connect({ node: a, socket: 'uv' }, { node: b, socket: 'uv' });
+    const withoutGroups = glslEsBackend.compileDocument(store().doc);
+
+    store().createGroup([a, b], { x: 0, y: 0, w: 50, h: 50 });
+    store().renameGroup(graph().groups![0].id, 'Terrain');
+    const withGroups = glslEsBackend.compileDocument(store().doc);
+
+    expect(withGroups.fragment).toBe(withoutGroups.fragment);
+    expect(withGroups.vertex).toBe(withoutGroups.vertex);
+    expect(withGroups.diagnostics).toEqual(withoutGroups.diagnostics);
+  });
+});
+
 describe('document lifecycle', () => {
   it('bumps meta.updated on every mutation', async () => {
     const { created, updated: before } = store().doc.meta;

@@ -16,6 +16,7 @@ import { create } from 'zustand';
 
 import {
   emptyDocument,
+  type NodeGroup,
   type ScalarOrVector,
   type ShaderDocument,
   type ShaderGraph,
@@ -30,7 +31,7 @@ import {
   type SocketTypeLookup,
 } from '../model/connect';
 import { emptyLayer, emptyMaskGraph } from '../model/factory';
-import { makeEdgeId, makeNodeId } from '../model/ids';
+import { makeEdgeId, makeGroupId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
 import type { PreviewScheduler, ViewerSource } from '../preview/scheduler';
@@ -190,6 +191,25 @@ export interface EditorStore {
   disconnect: (edgeId: string) => void;
   setParam: (nodeId: string, paramId: string, value: ScalarOrVector | string) => void;
   setParamExposed: (nodeId: string, paramId: string, exposed: boolean) => void;
+
+  // Groups / frames (purely organisational — see `NodeGroup` in the model;
+  // never read by the compiler)
+  /** Frame `nodeIds` (must resolve against the graph currently being edited)
+   *  under one new `NodeGroup` at `bounds`, and assign each member's
+   *  `groupId`. Returns the new group's id, or `null` (with `lastError`) if
+   *  fewer than two of `nodeIds` resolve. */
+  createGroup: (nodeIds: string[], bounds: NodeGroup['bounds'], title?: string) => string | null;
+  renameGroup: (groupId: string, title: string) => void;
+  recolorGroup: (groupId: string, color: string | undefined) => void;
+  setGroupBounds: (groupId: string, bounds: NodeGroup['bounds']) => void;
+  /** Delete the group and clear `groupId` on any member nodes — the members
+   *  themselves are never touched otherwise. */
+  removeGroup: (groupId: string) => void;
+  /** Assign or clear (`undefined`) one node's `groupId` directly — how
+   *  dragging a node into/out of a frame's bounds updates membership.
+   *  Silently ignored if `groupId` does not name a group in the current
+   *  graph. */
+  setNodeGroup: (nodeId: string, groupId: string | undefined) => void;
 
   // Layers
   setActiveLayer: (id: string) => void;
@@ -395,6 +415,92 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     });
     if (doc) set({ doc, lastError: null });
     else set({ lastError: `No param "${paramId}" on node "${nodeId}".` });
+  },
+
+  createGroup(nodeIds, bounds, title) {
+    const newGroup: NodeGroup = {
+      id: makeGroupId(),
+      title: title?.trim() || 'Group',
+      bounds: { ...bounds },
+    };
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
+      const members = new Set(nodeIds.filter((id) => graph.nodes.some((n) => n.id === id)));
+      if (members.size < 2) return null;
+      return {
+        ...graph,
+        groups: [...(graph.groups ?? []), newGroup],
+        nodes: graph.nodes.map((n) => (members.has(n.id) ? { ...n, groupId: newGroup.id } : n)),
+      };
+    });
+    if (!doc) {
+      set({ lastError: 'Select at least two nodes to group.' });
+      return null;
+    }
+    set({ doc, lastError: null });
+    return newGroup.id;
+  },
+
+  renameGroup(groupId, title) {
+    const next = title.trim() || 'Group';
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
+      const index = (graph.groups ?? []).findIndex((g) => g.id === groupId);
+      if (index < 0) return null;
+      const groups = graph.groups!.slice();
+      if (groups[index].title === next) return null;
+      groups[index] = { ...groups[index], title: next };
+      return { ...graph, groups };
+    });
+    if (doc) set({ doc, lastError: null });
+    else set({ lastError: `No group "${groupId}".` });
+  },
+
+  recolorGroup(groupId, color) {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
+      const index = (graph.groups ?? []).findIndex((g) => g.id === groupId);
+      if (index < 0) return null;
+      const groups = graph.groups!.slice();
+      groups[index] = { ...groups[index], color };
+      return { ...graph, groups };
+    });
+    if (doc) set({ doc, lastError: null });
+    else set({ lastError: `No group "${groupId}".` });
+  },
+
+  setGroupBounds(groupId, bounds) {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
+      const index = (graph.groups ?? []).findIndex((g) => g.id === groupId);
+      if (index < 0) return null;
+      const groups = graph.groups!.slice();
+      groups[index] = { ...groups[index], bounds: { ...bounds } };
+      return { ...graph, groups };
+    });
+    if (doc) set({ doc });
+  },
+
+  removeGroup(groupId) {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
+      if (!(graph.groups ?? []).some((g) => g.id === groupId)) return null;
+      return {
+        ...graph,
+        groups: graph.groups!.filter((g) => g.id !== groupId),
+        nodes: graph.nodes.map((n) => (n.groupId === groupId ? { ...n, groupId: undefined } : n)),
+      };
+    });
+    if (doc) set({ doc, lastError: null });
+    else set({ lastError: `No group "${groupId}".` });
+  },
+
+  setNodeGroup(nodeId, groupId) {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
+      if (groupId && !(graph.groups ?? []).some((g) => g.id === groupId)) return null;
+      const index = graph.nodes.findIndex((n) => n.id === nodeId);
+      if (index < 0) return null;
+      if (graph.nodes[index].groupId === groupId) return null;
+      const nextNodes = graph.nodes.slice();
+      nextNodes[index] = { ...nextNodes[index], groupId };
+      return { ...graph, nodes: nextNodes };
+    });
+    if (doc) set({ doc });
   },
 
   setActiveLayer(id) {
