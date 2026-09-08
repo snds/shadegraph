@@ -22,14 +22,15 @@ const EXPECTED_TYPES = [
   'noise.fbm',
   'color.ramp',
   'output.surface',
+  'output.mask',
 ];
 
 const fresh = () => registerStarterNodes(new NodeRegistry());
 
 describe('starter node registration', () => {
-  it('registers all 8 starter definitions', () => {
+  it('registers all 9 starter definitions', () => {
     const registry = fresh();
-    expect(registry.all()).toHaveLength(8);
+    expect(registry.all()).toHaveLength(9);
     expect(registry.all().map((d) => d.type).sort()).toEqual([...EXPECTED_TYPES].sort());
   });
 
@@ -42,7 +43,7 @@ describe('starter node registration', () => {
   it('is idempotent — re-registering does not throw or duplicate', () => {
     const registry = fresh();
     expect(() => registerStarterNodes(registry)).not.toThrow();
-    expect(registry.all()).toHaveLength(8);
+    expect(registry.all()).toHaveLength(9);
   });
 
   it('groups definitions by category', () => {
@@ -51,7 +52,7 @@ describe('starter node registration', () => {
     expect(byCategory.math.map((d) => d.type)).toEqual(['math.add', 'math.mul', 'math.mix']);
     expect(byCategory.noise.map((d) => d.type)).toEqual(['noise.fbm']);
     expect(byCategory.color.map((d) => d.type)).toEqual(['color.ramp']);
-    expect(byCategory.output.map((d) => d.type)).toEqual(['output.surface']);
+    expect(byCategory.output.map((d) => d.type)).toEqual(['output.surface', 'output.mask']);
   });
 
   it('has no duplicate node types', () => {
@@ -121,9 +122,9 @@ describe('definition invariants', () => {
     },
   );
 
-  it('only output.surface is terminal (no output sockets)', () => {
+  it('only the output nodes are terminal (no output sockets)', () => {
     const terminal = starterDefinitions.filter((d) => d.outputs.length === 0);
-    expect(terminal.map((d) => d.type)).toEqual(['output.surface']);
+    expect(terminal.map((d) => d.type)).toEqual(['output.surface', 'output.mask']);
   });
 });
 

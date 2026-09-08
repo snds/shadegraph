@@ -1,12 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ShadeGraph — Starter node definitions (Phase 1)
 // ───────────────────────────────────────────────────────────────────────────
-// Importing this module registers the Phase 1 node set into the `nodes`
-// registry singleton, so the palette, connection validation, and the inspector
-// all have real definitions to work with:
+// Importing this module registers the Phase 1 (+ Phase 3 mask) node set into
+// the `nodes` registry singleton, so the palette, connection validation, and
+// the inspector all have real definitions to work with:
 //
 //   input.uv · input.time · math.add · math.mul · math.mix · noise.fbm ·
-//   color.ramp · output.surface
+//   color.ramp · output.surface · output.mask
 //
 // Pure data + emitters. No React, no DOM, no GPU.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -17,8 +17,9 @@ import { mathAdd, mathMix, mathMul } from './math';
 import { noiseFbm } from './noise';
 import { colorRamp } from './color';
 import { outputSurface } from './output';
+import { outputMask } from './mask';
 
-/** The Phase 1 starter set, in palette order. */
+/** The Phase 1 starter set (+ Phase 3's `output.mask`), in palette order. */
 export const starterDefinitions: NodeDefinition[] = [
   inputUv,
   inputTime,
@@ -28,6 +29,7 @@ export const starterDefinitions: NodeDefinition[] = [
   noiseFbm,
   colorRamp,
   outputSurface,
+  outputMask,
 ];
 
 /** Idempotent: safe to call more than once, and against a throwaway registry
@@ -43,6 +45,7 @@ export function registerStarterNodes(registry: NodeRegistry = nodes): NodeRegist
 // Side-effect: populate the shared singleton on import.
 registerStarterNodes();
 
-export { inputUv, inputTime, mathAdd, mathMul, mathMix, noiseFbm, colorRamp, outputSurface };
+export { inputUv, inputTime, mathAdd, mathMul, mathMix, noiseFbm, colorRamp, outputSurface, outputMask };
 export { OUTPUT_NODE_TYPE } from './output';
+export { OUTPUT_MASK_NODE_TYPE } from './mask';
 export { ident, param, paramUniform, paramValue } from './helpers';
