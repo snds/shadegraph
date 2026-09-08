@@ -120,6 +120,13 @@ export interface ShaderNode {
   collapsed?: boolean;
   /** Optional group/frame membership for organising large graphs. */
   groupId?: string;
+  /** Set only when `type === SUBGRAPH_INSTANCE_NODE_TYPE` (`"subgraph.instance"`,
+   *  see `src/model/subgraph.ts`): the `SubGraph.id` (`ShaderDocument.subGraphs`)
+   *  this node instances. A subgraph-instance node is special-cased outside the
+   *  `NodeRegistry` — its sockets are resolved LIVE from the referenced
+   *  `SubGraph.inputs`/`outputs`, never copied here, so editing the subgraph's
+   *  interface is instantly visible on every instance. */
+  subGraphId?: string;
 }
 
 export interface Edge {

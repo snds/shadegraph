@@ -110,7 +110,7 @@ function GraphCanvasInner() {
   const layerId = activeLayerId(doc);
   const viewingMask = activeGraphKind(doc, editingTarget) === 'mask';
   const layer = activeLayer(doc);
-  const lookup = useMemo(() => registrySocketLookup(graph), [graph]);
+  const lookup = useMemo(() => registrySocketLookup(graph, doc.subGraphs), [graph, doc.subGraphs]);
 
   // Edge and group/frame selection are editor-only: the document has no place
   // for either. Reset on any switch of WHICH graph is showing — a new active

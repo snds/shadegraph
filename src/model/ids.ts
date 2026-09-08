@@ -48,6 +48,19 @@ export function makeGroupId(): string {
   return `group_${suffix()}`;
 }
 
+/** Unique id for a new `SubGraph` (`ShaderDocument.subGraphs`). */
+export function makeSubGraphId(): string {
+  return `subgraph_${suffix()}`;
+}
+
+/** Unique id for a new exposed socket on a `SubGraph`'s interface, added
+ *  directly via the interface editor (as opposed to one auto-derived by
+ *  extraction, which uses `${nodeId}:${socketId}` instead — see
+ *  `src/model/subgraph.ts`). */
+export function makeSocketId(): string {
+  return `socket_${suffix()}`;
+}
+
 /** Deterministic edge id from its endpoints — two identical links always
  *  produce the same id, so duplicates collapse instead of stacking. */
 export function makeEdgeId(source: Edge['source'], target: Edge['target']): string {

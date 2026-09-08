@@ -22,6 +22,10 @@ import {
   type ShaderGraph,
   type ShaderLayer,
   type ShaderNode,
+  type Socket,
+  type SocketDirection,
+  type SocketType,
+  type SubGraph,
 } from '../model/document';
 import {
   edgesTouchingNodes,
@@ -31,7 +35,13 @@ import {
   type SocketTypeLookup,
 } from '../model/connect';
 import { emptyLayer, emptyMaskGraph } from '../model/factory';
-import { makeEdgeId, makeGroupId, makeNodeId } from '../model/ids';
+import { makeEdgeId, makeGroupId, makeNodeId, makeSocketId } from '../model/ids';
+import {
+  extractSubGraph as extractSubGraphModel,
+  instantiateSubGraph as instantiateSubGraphModel,
+  isSubGraphInstanceNode,
+  subGraphInstanceSocket,
+} from '../model/subgraph';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
 import type { PreviewScheduler, ViewerSource } from '../preview/scheduler';
@@ -53,20 +63,29 @@ export function activeLayer(doc: ShaderDocument): ShaderLayer {
 }
 
 /** `{ kind: 'layer' }` shows the active layer's main graph (the default);
- *  `{ kind: 'mask', layerId }` shows that layer's `maskGraph` instead. Lives
- *  in the store (not the document) — it is view state, same treatment as
- *  `selectedNodeIds`, never serialized. `layerId` is checked against the
- *  active layer on every read (see `activeGraphKind`), so a stale target
- *  (its layer removed, its mask removed, or the active layer switched away
- *  from underneath it) self-heals back to `'layer'` rather than pointing at
- *  nothing. */
-export type EditingTarget = { kind: 'layer' } | { kind: 'mask'; layerId: string };
+ *  `{ kind: 'mask', layerId }` shows that layer's `maskGraph` instead;
+ *  `{ kind: 'subgraph', subGraphId }` shows that `SubGraph`'s own internal
+ *  graph instead — the "dive in" view entered from a subgraph-instance node
+ *  (`ShaderNodeCard`'s dive-in affordance), independent of the active layer.
+ *  Lives in the store (not the document) — it is view state, same treatment
+ *  as `selectedNodeIds`, never serialized. `layerId`/`subGraphId` are checked
+ *  against the live document on every read (see `activeGraphKind`), so a
+ *  stale target (its layer/mask/subgraph removed, or the active layer
+ *  switched away from underneath it) self-heals back to `'layer'` rather
+ *  than pointing at nothing. */
+export type EditingTarget =
+  | { kind: 'layer' }
+  | { kind: 'mask'; layerId: string }
+  | { kind: 'subgraph'; subGraphId: string };
 
-/** Whether the canvas is currently showing the active layer's mask graph or
- *  its main graph. The one place that decides this, so `activeGraph`,
- *  `withActiveGraph` and the UI (breadcrumb, layer-stack mask control) can
- *  never disagree. */
-export function activeGraphKind(doc: ShaderDocument, editingTarget: EditingTarget): 'layer' | 'mask' {
+/** Whether the canvas is currently showing the active layer's mask graph, a
+ *  subgraph's own graph, or the active layer's main graph. The one place
+ *  that decides this, so `activeGraph`, `withActiveGraph` and the UI
+ *  (breadcrumb, layer-stack mask control) can never disagree. */
+export function activeGraphKind(doc: ShaderDocument, editingTarget: EditingTarget): 'layer' | 'mask' | 'subgraph' {
+  if (editingTarget.kind === 'subgraph') {
+    return doc.subGraphs.some((sg) => sg.id === editingTarget.subGraphId) ? 'subgraph' : 'layer';
+  }
   const layer = activeLayer(doc);
   return editingTarget.kind === 'mask' && editingTarget.layerId === layer.id && !!layer.maskGraph
     ? 'mask'
@@ -74,18 +93,22 @@ export function activeGraphKind(doc: ShaderDocument, editingTarget: EditingTarge
 }
 
 /** The graph currently being edited: the active layer's main graph, unless
- *  `editingTarget` names its mask (see `activeGraphKind`). `editingTarget`
- *  defaults to the LIVE store value (evaluated per call, not memoized) —
- *  pre-existing single-argument callers (`Inspector.tsx`, the store's own
- *  tests) keep reading `activeGraph(doc)` unmodified and still resolve
- *  against whichever graph the canvas actually has open. Reactive callers
- *  that need a re-render on `editingTarget` changes alone (e.g.
+ *  `editingTarget` names its mask or a subgraph (see `activeGraphKind`).
+ *  `editingTarget` defaults to the LIVE store value (evaluated per call, not
+ *  memoized) — pre-existing single-argument callers (`Inspector.tsx`, the
+ *  store's own tests) keep reading `activeGraph(doc)` unmodified and still
+ *  resolve against whichever graph the canvas actually has open. Reactive
+ *  callers that need a re-render on `editingTarget` changes alone (e.g.
  *  `GraphCanvas.tsx`) should still subscribe to it explicitly and pass it
  *  in, since a default-parameter read does not itself trigger React updates. */
 export function activeGraph(
   doc: ShaderDocument,
   editingTarget: EditingTarget = useEditorStore.getState().editingTarget,
 ): ShaderGraph {
+  if (editingTarget.kind === 'subgraph') {
+    const subGraph = doc.subGraphs.find((sg) => sg.id === editingTarget.subGraphId);
+    if (subGraph) return subGraph.graph;
+  }
   const layer = activeLayer(doc);
   return activeGraphKind(doc, editingTarget) === 'mask' ? (layer.maskGraph as ShaderGraph) : layer.graph;
 }
@@ -101,14 +124,29 @@ function touch(doc: ShaderDocument): ShaderDocument {
   return { ...doc, meta: { ...doc.meta, updated: new Date().toISOString() } };
 }
 
-/** Replace the currently EDITED graph immutably — the active layer's
- *  `maskGraph` while `editingTarget` names it (per `activeGraphKind`),
- *  otherwise its main `graph`. `fn` returns `null` to abort. */
+/** Replace the currently EDITED graph immutably — a `SubGraph`'s own `graph`
+ *  while `editingTarget` names one (mutating `doc.subGraphs`, never
+ *  `layerStack`), the active layer's `maskGraph` while it names that instead
+ *  (per `activeGraphKind`), otherwise its main `graph`. `fn` returns `null`
+ *  to abort. */
 function withActiveGraph(
   doc: ShaderDocument,
   editingTarget: EditingTarget,
   fn: (graph: ShaderGraph) => ShaderGraph | null,
 ): ShaderDocument | null {
+  if (editingTarget.kind === 'subgraph') {
+    const index = doc.subGraphs.findIndex((sg) => sg.id === editingTarget.subGraphId);
+    if (index >= 0) {
+      const subGraph = doc.subGraphs[index];
+      const nextGraph = fn(subGraph.graph);
+      if (!nextGraph || nextGraph === subGraph.graph) return null;
+      const subGraphs = doc.subGraphs.slice();
+      subGraphs[index] = { ...subGraph, graph: nextGraph };
+      return touch({ ...doc, subGraphs });
+    }
+    // Unknown subGraphId (e.g. self-healing from a stale target) — fall
+    // through to the layer/mask path exactly like `activeGraphKind` would.
+  }
   const id = activeLayerId(doc);
   const index = doc.layerStack.layers.findIndex((l) => l.id === id);
   if (index < 0) return null;
@@ -122,11 +160,19 @@ function withActiveGraph(
   return touch({ ...doc, layerStack: { ...doc.layerStack, layers } });
 }
 
-/** Socket-type resolution for one graph, via the node registry. */
-function socketLookup(graph: ShaderGraph): SocketTypeLookup {
+/** Socket-type resolution for one graph, via the node registry — except a
+ *  subgraph-instance node, special-cased per the Phase 3 sketch's decision:
+ *  its sockets come from `subGraphs` (the referenced `SubGraph.inputs`/
+ *  `outputs`) at read time, never the registry. Mirrors
+ *  `src/ui/graph/socketLookup.ts`'s `registrySocketLookup`, which the canvas
+ *  uses for the same purpose before a connection is committed. */
+function socketLookup(graph: ShaderGraph, subGraphs: SubGraph[]): SocketTypeLookup {
   return (nodeId, socketId, direction) => {
     const node = graph.nodes.find((n) => n.id === nodeId);
     if (!node) return undefined;
+    if (isSubGraphInstanceNode(node)) {
+      return subGraphInstanceSocket(subGraphs, node, socketId, direction)?.type;
+    }
     const def = nodes.get(node.type);
     if (!def) return undefined;
     const sockets = direction === 'out' ? def.outputs : def.inputs;
@@ -141,6 +187,68 @@ function withActiveLayerSet(doc: ShaderDocument): ShaderDocument {
     ...doc,
     layerStack: { ...doc.layerStack, activeLayerId: activeLayerId(doc) },
   };
+}
+
+/** Minimal `get`/`set` shape the two helpers below need — narrower than
+ *  zustand's full `StoreApi`, since neither ever needs the functional-update
+ *  overload of `set`. */
+type GetEditorState = () => EditorStore;
+type SetEditorState = (partial: Partial<EditorStore>) => void;
+
+/** Shared body for `addSubGraphInput`/`addSubGraphOutput`: append a fresh
+ *  exposed socket to a `SubGraph`'s interface. Returns the new socket's id,
+ *  or `null` (with `lastError`) if `subGraphId` names no `SubGraph`. */
+function addSubGraphSocket(
+  get: GetEditorState,
+  set: SetEditorState,
+  subGraphId: string,
+  direction: SocketDirection,
+  label: string,
+  type: SocketType,
+): string | null {
+  const doc = get().doc;
+  const index = doc.subGraphs.findIndex((sg) => sg.id === subGraphId);
+  if (index < 0) {
+    set({ lastError: `No subgraph "${subGraphId}".` });
+    return null;
+  }
+  const socket: Socket = {
+    id: makeSocketId(),
+    label: label.trim() || (direction === 'in' ? 'Input' : 'Output'),
+    type,
+    direction,
+  };
+  const subGraph = doc.subGraphs[index];
+  const nextSubGraph =
+    direction === 'in'
+      ? { ...subGraph, inputs: [...subGraph.inputs, socket] }
+      : { ...subGraph, outputs: [...subGraph.outputs, socket] };
+  const subGraphs = doc.subGraphs.slice();
+  subGraphs[index] = nextSubGraph;
+  set({ doc: touch({ ...doc, subGraphs }), lastError: null });
+  return socket.id;
+}
+
+/** Shared body for `removeSubGraphInput`/`removeSubGraphOutput`. No-op if
+ *  `subGraphId`/`socketId` do not resolve. */
+function removeSubGraphSocket(
+  get: GetEditorState,
+  set: SetEditorState,
+  subGraphId: string,
+  direction: SocketDirection,
+  socketId: string,
+): void {
+  const doc = get().doc;
+  const index = doc.subGraphs.findIndex((sg) => sg.id === subGraphId);
+  if (index < 0) return;
+  const subGraph = doc.subGraphs[index];
+  const list = direction === 'in' ? subGraph.inputs : subGraph.outputs;
+  if (!list.some((s) => s.id === socketId)) return;
+  const filtered = list.filter((s) => s.id !== socketId);
+  const nextSubGraph = direction === 'in' ? { ...subGraph, inputs: filtered } : { ...subGraph, outputs: filtered };
+  const subGraphs = doc.subGraphs.slice();
+  subGraphs[index] = nextSubGraph;
+  set({ doc: touch({ ...doc, subGraphs }), lastError: null });
 }
 
 // ── Store ──────────────────────────────────────────────────────────────────
@@ -240,6 +348,46 @@ export interface EditorStore {
   /** Switch the canvas back to the active layer's main graph. No-op if
    *  already there. */
   exitMaskEditing: () => void;
+
+  // Subgraphs (reusable graphs referenced by an instance node — see
+  // `SubGraph`, `src/model/subgraph.ts`, and `EditingTarget`'s `'subgraph'`
+  // kind). Instance nodes themselves are created by `extractSubGraph` /
+  // `instantiateSubGraph`; there is no separate "addNode" path for them since
+  // they are not in the `NodeRegistry`.
+  /** Move `nodeIds` (+ their internal edges) out of the graph currently being
+   *  edited into a new `SubGraph`, auto-detecting exposed inputs/outputs from
+   *  edges crossing the selection boundary, and replace the selection with
+   *  one instance node (selected afterward). Returns the new instance node's
+   *  id, or `null` (with `lastError`) if the selection is empty or includes
+   *  the graph's output node — see `extractSubGraph` in `src/model/subgraph.ts`. */
+  extractSubGraph: (nodeIds: string[], name?: string) => string | null;
+  /** Drop a NEW instance of an existing `SubGraph` into the graph currently
+   *  being edited, at `position`. Returns its node id, or `null` (with
+   *  `lastError`) if `subGraphId` names no `SubGraph`. */
+  instantiateSubGraph: (subGraphId: string, position: { x: number; y: number }) => string | null;
+  /** Rename a `SubGraph`. No-op on an empty/unchanged trimmed name. */
+  renameSubGraph: (subGraphId: string, name: string) => void;
+  /** Append a new exposed input/output socket to a `SubGraph`'s interface —
+   *  visible immediately on every instance, since instances read sockets live
+   *  (see `subGraphInstanceSocket`). Returns the new socket's id, or `null`
+   *  (with `lastError`) if `subGraphId` names no `SubGraph`. */
+  addSubGraphInput: (subGraphId: string, label: string, type: SocketType) => string | null;
+  addSubGraphOutput: (subGraphId: string, label: string, type: SocketType) => string | null;
+  /** Remove one exposed input/output from a `SubGraph`'s interface. No-op if
+   *  `subGraphId`/`socketId` do not resolve. Note: this does NOT prune any
+   *  edge elsewhere in the document that happened to target that socket on an
+   *  instance — a follow-on concern for whoever wires up the compiler-side
+   *  inlining, not this task. */
+  removeSubGraphInput: (subGraphId: string, socketId: string) => void;
+  removeSubGraphOutput: (subGraphId: string, socketId: string) => void;
+  /** Switch the canvas to editing `subGraphId`'s own graph ("dive in" —
+   *  reuses the mask task's `EditingTarget` switching mechanism, extended to
+   *  a third kind, rather than a parallel one). Fails via `lastError` if
+   *  `subGraphId` names no `SubGraph`. */
+  enterSubGraphEditing: (subGraphId: string) => void;
+  /** Switch the canvas back to the active layer's main graph. No-op if
+   *  already there. */
+  exitSubGraphEditing: () => void;
 
   // Editor / document
   selectNodes: (ids: string[]) => void;
@@ -349,8 +497,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   connect(source, target) {
-    const graph = activeGraph(get().doc, get().editingTarget);
-    const verdict = validateConnection(graph, source, target, socketLookup(graph));
+    const doc = get().doc;
+    const graph = activeGraph(doc, get().editingTarget);
+    const verdict = validateConnection(graph, source, target, socketLookup(graph, doc.subGraphs));
     if (!verdict.ok) {
       set({ lastError: verdict.message });
       return verdict;
@@ -360,8 +509,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       source: { node: source.node, socket: source.socket },
       target: { node: target.node, socket: target.socket },
     };
-    const doc = withActiveGraph(get().doc, get().editingTarget, (g) => ({ ...g, edges: [...g.edges, edge] }));
-    if (!doc) {
+    const nextDoc = withActiveGraph(doc, get().editingTarget, (g) => ({ ...g, edges: [...g.edges, edge] }));
+    if (!nextDoc) {
       const failure: ConnectionCheck = {
         ok: false,
         reason: 'unknown-source',
@@ -370,7 +519,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       set({ lastError: failure.message });
       return failure;
     }
-    set({ doc, lastError: null });
+    set({ doc: nextDoc, lastError: null });
     return verdict;
   },
 
@@ -671,6 +820,92 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   exitMaskEditing() {
+    if (get().editingTarget.kind === 'layer') return;
+    set({ editingTarget: { kind: 'layer' }, selectedNodeIds: [], lastError: null });
+  },
+
+  extractSubGraph(nodeIds, name) {
+    const doc = get().doc;
+    const editingTarget = get().editingTarget;
+    const graph = activeGraph(doc, editingTarget);
+    const result = extractSubGraphModel(graph, nodeIds, name?.trim() || 'Subgraph', socketLookup(graph, doc.subGraphs));
+    if (!result.ok) {
+      set({ lastError: result.message });
+      return null;
+    }
+    const nextDoc = withActiveGraph(doc, editingTarget, () => result.parentGraph);
+    if (!nextDoc) {
+      set({ lastError: 'No active graph to extract from.' });
+      return null;
+    }
+    set({
+      doc: { ...nextDoc, subGraphs: [...nextDoc.subGraphs, result.subGraph] },
+      selectedNodeIds: [result.instanceNodeId],
+      lastError: null,
+    });
+    return result.instanceNodeId;
+  },
+
+  instantiateSubGraph(subGraphId, position) {
+    const doc = get().doc;
+    const subGraph = doc.subGraphs.find((sg) => sg.id === subGraphId);
+    if (!subGraph) {
+      set({ lastError: `No subgraph "${subGraphId}".` });
+      return null;
+    }
+    const node = instantiateSubGraphModel(subGraph, position);
+    const nextDoc = withActiveGraph(doc, get().editingTarget, (graph) => ({
+      ...graph,
+      nodes: [...graph.nodes, node],
+    }));
+    if (!nextDoc) {
+      set({ lastError: 'No active graph to instantiate into.' });
+      return null;
+    }
+    set({ doc: nextDoc, lastError: null });
+    return node.id;
+  },
+
+  renameSubGraph(subGraphId, name) {
+    const next = name.trim();
+    const doc = get().doc;
+    const index = doc.subGraphs.findIndex((sg) => sg.id === subGraphId);
+    if (index < 0) {
+      set({ lastError: `No subgraph "${subGraphId}".` });
+      return;
+    }
+    if (!next || doc.subGraphs[index].name === next) return;
+    const subGraphs = doc.subGraphs.slice();
+    subGraphs[index] = { ...subGraphs[index], name: next };
+    set({ doc: touch({ ...doc, subGraphs }), lastError: null });
+  },
+
+  addSubGraphInput(subGraphId, label, type) {
+    return addSubGraphSocket(get, set, subGraphId, 'in', label, type);
+  },
+
+  addSubGraphOutput(subGraphId, label, type) {
+    return addSubGraphSocket(get, set, subGraphId, 'out', label, type);
+  },
+
+  removeSubGraphInput(subGraphId, socketId) {
+    removeSubGraphSocket(get, set, subGraphId, 'in', socketId);
+  },
+
+  removeSubGraphOutput(subGraphId, socketId) {
+    removeSubGraphSocket(get, set, subGraphId, 'out', socketId);
+  },
+
+  enterSubGraphEditing(subGraphId) {
+    const doc = get().doc;
+    if (!doc.subGraphs.some((sg) => sg.id === subGraphId)) {
+      set({ lastError: `No subgraph "${subGraphId}".` });
+      return;
+    }
+    set({ editingTarget: { kind: 'subgraph', subGraphId }, selectedNodeIds: [], lastError: null });
+  },
+
+  exitSubGraphEditing() {
     if (get().editingTarget.kind === 'layer') return;
     set({ editingTarget: { kind: 'layer' }, selectedNodeIds: [], lastError: null });
   },
