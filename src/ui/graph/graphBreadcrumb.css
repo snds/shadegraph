@@ -1,0 +1,28 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — mask-editing breadcrumb
+   Imported by `GraphBreadcrumb.tsx`, not the shared shell sheet: same
+   per-file-owns-its-styles pattern as `layers.css`. Only shell tokens used.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-breadcrumb {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border: 1px solid var(--sg-accent); border-radius: var(--sg-radius);
+  background: var(--sg-panel); font-size: 11px; color: var(--sg-dim);
+}
+
+.sg-breadcrumb__crumb {
+  font: inherit; color: var(--sg-text); background: transparent; border: 0;
+  padding: 0; cursor: pointer; text-decoration: underline dotted;
+}
+.sg-breadcrumb__crumb:hover { color: var(--sg-accent); }
+
+.sg-breadcrumb__sep { color: var(--sg-dim); }
+
+.sg-breadcrumb__current { color: var(--sg-accent); font-weight: 600; }
+
+.sg-breadcrumb__back {
+  margin-left: 4px; font: inherit; font-size: 10px; color: var(--sg-dim);
+  background: var(--sg-raised); border: 1px solid var(--sg-line); border-radius: 4px;
+  padding: 2px 6px; cursor: pointer;
+}
+.sg-breadcrumb__back:hover { color: var(--sg-text); border-color: var(--sg-accent); }
