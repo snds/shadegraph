@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { emptyDocument, type ShaderDocument, type ShaderGraph } from '../../model/document';
 import { emptyLayer } from '../../model/factory';
+import type { SocketTypeLookup } from '../../model/connect';
+import { SUBGRAPH_INSTANCE_NODE_TYPE, extractSubGraph } from '../../model/subgraph';
 import { registerStarterNodes } from '../../nodes/definitions';
-import { nodes } from '../../nodes/registry';
+import { NodeRegistry, nodes } from '../../nodes/registry';
 import { backends } from '../backend';
 import { coerceGlsl, glslEsBackend, glslLiteral, layerOpacityUniformName } from './glsl-es';
 
@@ -375,6 +377,76 @@ describe('glslEsBackend.compileDocument', () => {
       .split('\n')
       .find((line) => line.includes('= sg_blendMultiply('));
     expect(blendLine).toContain(`, ${overlayOpacityName});`);
+  });
+});
+
+// End-to-end proof that `subGraphs` actually reaches `lowerGraph` through
+// `compileDocument`, not just through `lowerGraph` directly (see
+// `lower.test.ts`'s "lowerGraph subgraph instance inlining" for that lower-level
+// coverage). Before this task, neither backend forwarded `CompileOptions.subGraphs`
+// nor `ShaderDocument.subGraphs` into its internal `lowerGraph` calls, so a
+// subgraph instance nested inside a real document silently inlined as nothing.
+describe('glslEsBackend.compileDocument — subgraph instances (end-to-end)', () => {
+  const registry = registerStarterNodes(new NodeRegistry());
+
+  function registryLookup(graph: ShaderGraph): SocketTypeLookup {
+    return (nodeId, socketId, direction) => {
+      const node = graph.nodes.find((n) => n.id === nodeId);
+      const def = node ? registry.get(node.type) : undefined;
+      const sockets = direction === 'out' ? def?.outputs : def?.inputs;
+      return sockets?.find((s) => s.id === socketId)?.type;
+    };
+  }
+
+  const mkEdge = (sn: string, ss: string, tn: string, ts: string) => ({
+    id: `${sn}:${ss}->${tn}:${ts}`,
+    source: { node: sn, socket: ss },
+    target: { node: tn, socket: ts },
+  });
+
+  it('compiles a document whose layer contains a subgraph instance to the exact same program as the ungrouped equivalent', () => {
+    // ext_in --b--> add1 --a--> mul1 --a--> out1.roughness  (add1, mul1 extracted)
+    const originalGraph: ShaderGraph = {
+      nodes: [
+        { id: 'ext_in', type: 'math.add', position: { x: 0, y: 0 }, params: [] },
+        { id: 'add1', type: 'math.add', position: { x: 100, y: 0 }, params: [] },
+        { id: 'mul1', type: 'math.mul', position: { x: 200, y: 0 }, params: [] },
+        { id: 'out1', type: 'output.surface', position: { x: 300, y: 0 }, params: [] },
+      ],
+      edges: [
+        mkEdge('ext_in', 'result', 'add1', 'b'),
+        mkEdge('add1', 'result', 'mul1', 'a'),
+        mkEdge('mul1', 'result', 'out1', 'roughness'),
+      ],
+      outputNodeId: 'out1',
+    };
+
+    const extraction = extractSubGraph(originalGraph, ['add1', 'mul1'], 'AddThenMul', registryLookup(originalGraph));
+    if (!extraction.ok) throw new Error(extraction.message);
+    expect(extraction.parentGraph.nodes.some((n) => n.type === SUBGRAPH_INSTANCE_NODE_TYPE)).toBe(true);
+
+    // Two single-layer documents sharing the same layer id, so only the
+    // presence/absence of the subgraph instance can perturb the fragment.
+    const plainDoc = emptyDocument('Plain');
+    plainDoc.layerStack.layers[0].graph = originalGraph;
+
+    const instancedDoc = emptyDocument('Instanced');
+    instancedDoc.layerStack.layers[0].id = plainDoc.layerStack.layers[0].id;
+    instancedDoc.layerStack.layers[0].graph = extraction.parentGraph;
+    instancedDoc.subGraphs = [extraction.subGraph];
+
+    const plainProgram = glslEsBackend.compileDocument(plainDoc);
+    const instancedProgram = glslEsBackend.compileDocument(instancedDoc);
+
+    expect(plainProgram.diagnostics).toEqual([]);
+    expect(instancedProgram.diagnostics).toEqual([]);
+    // The whole point of this test: without `subGraphs` threaded through,
+    // the instance node would silently fail to resolve and this equality
+    // would fail (or the instanced fragment would be missing the inlined
+    // add/mul statements entirely).
+    expect(instancedProgram.fragment).toBe(plainProgram.fragment);
+    expect(instancedProgram.fragment).toMatch(/float add_\d+ = /);
+    expect(instancedProgram.fragment).toMatch(/float mul_\d+ = /);
   });
 });
 
