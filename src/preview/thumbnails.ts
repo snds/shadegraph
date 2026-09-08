@@ -430,7 +430,10 @@ export class ThumbnailScheduler implements ThumbnailHost {
 
     let compiled: CompiledProgram;
     try {
-      compiled = this.compile(layer.graph, this.target, { previewNodeId: nodeId });
+      compiled = this.compile(layer.graph, this.target, {
+        previewNodeId: nodeId,
+        subGraphs: this.doc.subGraphs,
+      });
     } catch (err) {
       entry.dirty = false;
       this.rejectAll(entry, err);
