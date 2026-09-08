@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { SOCKET_COMPATIBILITY, type SocketType } from '../model/document';
+import { SOCKET_COMPATIBILITY, type ShaderNode, type SocketType, type SubGraph } from '../model/document';
 import type { ShaderGraph } from '../model/document';
+import type { SocketTypeLookup } from '../model/connect';
+import { SUBGRAPH_INSTANCE_NODE_TYPE, extractSubGraph } from '../model/subgraph';
 import { registerStarterNodes } from '../nodes/definitions';
 import { NodeRegistry } from '../nodes/registry';
 import { createEmitSink, lowerGraph, resolveOrder } from './lower';
@@ -186,5 +188,189 @@ describe('lowerGraph dispatch', () => {
     // `vec3 mix_... = mix(...)` statement is ever emitted.
     expect(result.outputExpr).toBe('vec3(0.0, 0.0, 0.0)');
     expect(handle.body).toEqual([]);
+  });
+});
+
+describe('lowerGraph subgraph instance inlining', () => {
+  const registry = registerStarterNodes(new NodeRegistry());
+  const hooks = { target: 'glsl-es' as const, coerce: coerceGlsl, literal: glslLiteral };
+
+  // Resolves a socket's declared type straight off the starter-node registry —
+  // exactly what `extractSubGraph` needs, and enough for a fixture with no
+  // subgraph instances of its own yet.
+  function registryLookup(graph: ShaderGraph): SocketTypeLookup {
+    return (nodeId, socketId, direction) => {
+      const node = graph.nodes.find((n) => n.id === nodeId);
+      const def = node ? registry.get(node.type) : undefined;
+      const sockets = direction === 'out' ? def?.outputs : def?.inputs;
+      return sockets?.find((s) => s.id === socketId)?.type;
+    };
+  }
+
+  const mkEdge = (sn: string, ss: string, tn: string, ts: string) => ({
+    id: `${sn}:${ss}->${tn}:${ts}`,
+    source: { node: sn, socket: ss },
+    target: { node: tn, socket: ts },
+  });
+
+  it('compiles a subgraph instance to the exact same program as the equivalent ungrouped graph', () => {
+    // ext_in --b--> add1 --a--> mul1 --a--> ext_out   (add1, mul1 get extracted)
+    const originalGraph: ShaderGraph = {
+      nodes: [
+        { id: 'ext_in', type: 'math.add', position: { x: 0, y: 0 }, params: [] },
+        { id: 'add1', type: 'math.add', position: { x: 100, y: 0 }, params: [] },
+        { id: 'mul1', type: 'math.mul', position: { x: 200, y: 0 }, params: [] },
+        { id: 'ext_out', type: 'math.add', position: { x: 300, y: 0 }, params: [] },
+      ],
+      edges: [
+        mkEdge('ext_in', 'result', 'add1', 'b'),
+        mkEdge('add1', 'result', 'mul1', 'a'),
+        mkEdge('mul1', 'result', 'ext_out', 'a'),
+      ],
+      outputNodeId: 'ext_out',
+    };
+
+    // Ground truth: compile the ungrouped graph directly, by hand.
+    const directHandle = createEmitSink();
+    const directResult = lowerGraph(originalGraph, registry, hooks, directHandle.sink);
+    expect(directHandle.diagnostics).toEqual([]);
+
+    // Now actually extract `add1`/`mul1` into a real SubGraph via the model's
+    // own extraction logic, instance it, and compile THAT instead.
+    const extraction = extractSubGraph(originalGraph, ['add1', 'mul1'], 'AddThenMul', registryLookup(originalGraph));
+    if (!extraction.ok) throw new Error(extraction.message);
+    expect(extraction.parentGraph.nodes.some((n) => n.type === SUBGRAPH_INSTANCE_NODE_TYPE)).toBe(true);
+
+    const instancedHandle = createEmitSink();
+    const instancedResult = lowerGraph(
+      extraction.parentGraph,
+      registry,
+      hooks,
+      instancedHandle.sink,
+      [extraction.subGraph],
+    );
+
+    expect(instancedHandle.diagnostics).toEqual([]);
+    // Inlining is exact: same statements, same output expression, same
+    // temp-name counter progression as compiling the original graph by hand.
+    expect(instancedHandle.body).toEqual(directHandle.body);
+    expect(instancedResult.outputExpr).toBe(directResult.outputExpr);
+    expect(instancedResult.outputExpr).toBeDefined();
+  });
+
+  it('an unresolvable subgraph reference (unknown id) is a diagnostic, not a crash', () => {
+    const graph: ShaderGraph = {
+      nodes: [
+        {
+          id: 'inst',
+          type: SUBGRAPH_INSTANCE_NODE_TYPE,
+          subGraphId: 'does-not-exist',
+          position: { x: 0, y: 0 },
+          params: [],
+        },
+        { id: 'sink', type: 'math.add', position: { x: 100, y: 0 }, params: [] },
+      ],
+      edges: [mkEdge('inst', 'whatever', 'sink', 'a')],
+      outputNodeId: 'sink',
+    };
+    expect(() => lowerGraph(graph, registry, hooks, createEmitSink().sink, [])).not.toThrow();
+
+    const handle = createEmitSink();
+    const result = lowerGraph(graph, registry, hooks, handle.sink, []);
+    expect(result.outputExpr).toBeDefined();
+    expect(handle.diagnostics.some((d) => d.level === 'error')).toBe(true);
+  });
+});
+
+describe('lowerGraph subgraph recursive cycle detection', () => {
+  const registry = registerStarterNodes(new NodeRegistry());
+  const hooks = { target: 'glsl-es' as const, coerce: coerceGlsl, literal: glslLiteral };
+
+  function instanceNode(id: string, subGraphId: string): ShaderNode {
+    return { id, type: SUBGRAPH_INSTANCE_NODE_TYPE, subGraphId, position: { x: 0, y: 0 }, params: [] };
+  }
+
+  it('a subgraph directly instancing itself is reported as a cycle, not an infinite loop / stack overflow', () => {
+    const subGraphA: SubGraph = {
+      id: 'sgA',
+      name: 'A',
+      inputs: [],
+      outputs: [{ id: 'inner:result', label: 'Out', type: 'float', direction: 'out' }],
+      graph: {
+        nodes: [instanceNode('inner', 'sgA')], // A instances itself, directly
+        edges: [],
+        outputNodeId: 'inner',
+      },
+    };
+
+    const outerGraph: ShaderGraph = {
+      nodes: [
+        instanceNode('outerInst', 'sgA'),
+        { id: 'sink', type: 'math.add', position: { x: 100, y: 0 }, params: [] },
+      ],
+      edges: [{ id: 'e', source: { node: 'outerInst', socket: 'inner:result' }, target: { node: 'sink', socket: 'a' } }],
+      outputNodeId: 'sink',
+    };
+
+    expect(() => lowerGraph(outerGraph, registry, hooks, createEmitSink().sink, [subGraphA])).not.toThrow();
+
+    const handle = createEmitSink();
+    const result = lowerGraph(outerGraph, registry, hooks, handle.sink, [subGraphA]);
+
+    // Falls back to `sink`'s default input safely; never hangs or throws.
+    expect(result.outputExpr).toBeDefined();
+    const cycleDiags = handle.diagnostics.filter((d) => /references itself/i.test(d.message));
+    expect(cycleDiags).toHaveLength(1);
+    expect(cycleDiags[0].level).toBe('error');
+    expect(cycleDiags[0].message).toContain('sgA');
+  });
+
+  it('two subgraphs that transitively reference each other (A -> B -> A) are also reported as a cycle, not a hang', () => {
+    const subGraphA: SubGraph = {
+      id: 'sgA',
+      name: 'A',
+      inputs: [],
+      outputs: [{ id: 'toB:result', label: 'Out', type: 'float', direction: 'out' }],
+      graph: {
+        nodes: [instanceNode('toB', 'sgB')], // A instances B
+        edges: [],
+        outputNodeId: 'toB',
+      },
+    };
+    const subGraphB: SubGraph = {
+      id: 'sgB',
+      name: 'B',
+      inputs: [],
+      outputs: [{ id: 'toA:result', label: 'Out', type: 'float', direction: 'out' }],
+      graph: {
+        nodes: [instanceNode('toA', 'sgA')], // B instances A back
+        edges: [],
+        outputNodeId: 'toA',
+      },
+    };
+
+    const outerGraph: ShaderGraph = {
+      nodes: [
+        instanceNode('outerInst', 'sgA'),
+        { id: 'sink', type: 'math.add', position: { x: 100, y: 0 }, params: [] },
+      ],
+      edges: [{ id: 'e', source: { node: 'outerInst', socket: 'toB:result' }, target: { node: 'sink', socket: 'a' } }],
+      outputNodeId: 'sink',
+    };
+
+    expect(() =>
+      lowerGraph(outerGraph, registry, hooks, createEmitSink().sink, [subGraphA, subGraphB]),
+    ).not.toThrow();
+
+    const handle = createEmitSink();
+    const result = lowerGraph(outerGraph, registry, hooks, handle.sink, [subGraphA, subGraphB]);
+
+    expect(result.outputExpr).toBeDefined();
+    const cycleDiags = handle.diagnostics.filter((d) => /references itself/i.test(d.message));
+    expect(cycleDiags).toHaveLength(1);
+    expect(cycleDiags[0].level).toBe('error');
+    // The reported chain names both subgraphs involved in the transitive cycle.
+    expect(cycleDiags[0].message).toContain('sgA');
+    expect(cycleDiags[0].message).toContain('sgB');
   });
 });
