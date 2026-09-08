@@ -276,7 +276,7 @@ void main() {
 `.trim();
 
 // `custom` has no compiled blend-graph field on `ShaderLayer` yet (only
-// `maskGraphId`, which is a mask, not a blend function) — falls back to Normal
+// `maskGraph`, which is a mask, not a blend function) — falls back to Normal
 // with a diagnostic rather than silently guessing at semantics.
 const BLEND_FN: Record<BlendMode, string> = {
   normal: 'sg_blendNormal',
@@ -478,8 +478,32 @@ function compileDocument(
       paramId: 'opacity',
       default: layer.opacity,
     });
+
+    // A mask graph is compiled through the same `lowerGraph` path as the
+    // layer's own graph (sharing `handle.sink`, so its uniforms/temps/prelude
+    // dedup exactly like any other node), terminating at its `output.mask`
+    // node instead of `output.surface`. Its float result multiplies into the
+    // opacity term passed to the blend function — a per-pixel modulation,
+    // not a flat scalar, unlike the opacity uniform alone.
+    let opacityExpr = opacityUniform;
+    if (layer.maskGraph) {
+      const maskBodyOffset = handle.body.length;
+      const maskResult = lowerGraph(layer.maskGraph, registry, HOOKS, handle.sink);
+      for (const entry of maskResult.sourceMap) {
+        relativeSourceMap.push({ line: maskBodyOffset + entry.line, nodeId: entry.nodeId });
+      }
+      if (maskResult.outputExpr === undefined) {
+        handle.sink.diag({
+          level: 'error',
+          message: `Layer "${layer.name}" (${layer.id})'s mask graph produced no output; ignoring the mask for this layer.`,
+        });
+      } else {
+        opacityExpr = `(${opacityUniform} * ${maskResult.outputExpr})`;
+      }
+    }
+
     const v = handle.sink.temp('layerComposite');
-    handle.sink.emit(`vec3 ${v} = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityUniform});`);
+    handle.sink.emit(`vec3 ${v} = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityExpr});`);
     compositeVar = v;
   }
 

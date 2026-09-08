@@ -303,6 +303,79 @@ describe('glslEsBackend.compileDocument', () => {
       0.9,
     );
   });
+
+  // A mask graph terminates at `output.mask` instead of `output.surface` and
+  // is compiled through the same `lowerGraph` path as the layer's own graph,
+  // sharing the document's single emit sink — no separate compiled program.
+  function uvFbmMaskGraph(): ShaderGraph {
+    return {
+      nodes: [
+        { id: 'maskUv1', type: 'input.uv', position: { x: 0, y: 0 }, params: [] },
+        { id: 'maskFbm1', type: 'noise.fbm', position: { x: 200, y: 0 }, params: [] },
+        { id: 'maskOut1', type: 'output.mask', position: { x: 400, y: 0 }, params: [] },
+      ],
+      edges: [
+        {
+          id: 'maskUv1:uv->maskFbm1:uv',
+          source: { node: 'maskUv1', socket: 'uv' },
+          target: { node: 'maskFbm1', socket: 'uv' },
+        },
+        {
+          id: 'maskFbm1:value->maskOut1:value',
+          source: { node: 'maskFbm1', socket: 'value' },
+          target: { node: 'maskOut1', socket: 'value' },
+        },
+      ],
+      outputNodeId: 'maskOut1',
+    };
+  }
+
+  it('golden snapshot: a masked layer multiplies the mask value into the opacity term, per-pixel', () => {
+    const doc = twoLayerDoc();
+    const overlay = doc.layerStack.layers[1];
+    overlay.maskGraph = uvFbmMaskGraph();
+    const overlayOpacityName = layerOpacityUniformName(overlay.id);
+
+    const program = glslEsBackend.compileDocument(doc);
+    expect(program.diagnostics).toEqual([]);
+    const fragment = program.fragment ?? '';
+
+    // The mask graph's own nodes (fbm, then `output.mask`'s clamp) are
+    // lowered straight into the shared body, not a separate program.
+    expect(fragment).toMatch(/sg_fbm\(/);
+    expect(fragment).toMatch(/float mask_\d+ = clamp\(fbm_\d+, 0\.0, 1\.0\);/);
+
+    // The blend call site multiplies the mask's value into the opacity
+    // uniform, per-pixel — not a flat scalar, and not a second uniform.
+    const blendLine = fragment.split('\n').find((line) => line.includes('= sg_blendMultiply('));
+    expect(blendLine).toMatch(new RegExp(`\\(${overlayOpacityName} \\* mask_\\d+\\)`));
+  });
+
+  it('a layer with no maskGraph composites exactly as before (opacity uniform alone)', () => {
+    const doc = twoLayerDoc();
+    const overlayOpacityName = layerOpacityUniformName(doc.layerStack.layers[1].id);
+    const program = glslEsBackend.compileDocument(doc);
+    const blendLine = (program.fragment ?? '')
+      .split('\n')
+      .find((line) => line.includes('= sg_blendMultiply('));
+    expect(blendLine).toContain(`, ${overlayOpacityName});`);
+  });
+
+  it("a mask graph with no resolvable output falls back to the layer's opacity alone, with a diagnostic", () => {
+    const doc = twoLayerDoc();
+    const overlay = doc.layerStack.layers[1];
+    overlay.maskGraph = { nodes: [], edges: [], outputNodeId: 'does-not-exist' };
+    const overlayOpacityName = layerOpacityUniformName(overlay.id);
+
+    const program = glslEsBackend.compileDocument(doc);
+    expect(
+      program.diagnostics.some((d) => d.level === 'error' && d.message.includes('mask graph')),
+    ).toBe(true);
+    const blendLine = (program.fragment ?? '')
+      .split('\n')
+      .find((line) => line.includes('= sg_blendMultiply('));
+    expect(blendLine).toContain(`, ${overlayOpacityName});`);
+  });
 });
 
 describe('coerceGlsl', () => {
