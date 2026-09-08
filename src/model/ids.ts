@@ -43,6 +43,11 @@ export function makeDocumentId(): string {
   return `doc_${suffix()}`;
 }
 
+/** Unique id for a new node group / frame. */
+export function makeGroupId(): string {
+  return `group_${suffix()}`;
+}
+
 /** Deterministic edge id from its endpoints — two identical links always
  *  produce the same id, so duplicates collapse instead of stacking. */
 export function makeEdgeId(source: Edge['source'], target: Edge['target']): string {
