@@ -29,7 +29,7 @@ import {
   type EndpointRef,
   type SocketTypeLookup,
 } from '../model/connect';
-import { emptyLayer } from '../model/factory';
+import { emptyLayer, emptyMaskGraph } from '../model/factory';
 import { makeEdgeId, makeNodeId } from '../model/ids';
 import { nodes } from '../nodes/registry';
 import { moveLayer, type StackDirection } from './layers/reorder';
@@ -51,9 +51,42 @@ export function activeLayer(doc: ShaderDocument): ShaderLayer {
   return doc.layerStack.layers.find((l) => l.id === id) ?? doc.layerStack.layers[0];
 }
 
-/** The graph currently being edited. */
-export function activeGraph(doc: ShaderDocument): ShaderGraph {
-  return activeLayer(doc).graph;
+/** `{ kind: 'layer' }` shows the active layer's main graph (the default);
+ *  `{ kind: 'mask', layerId }` shows that layer's `maskGraph` instead. Lives
+ *  in the store (not the document) — it is view state, same treatment as
+ *  `selectedNodeIds`, never serialized. `layerId` is checked against the
+ *  active layer on every read (see `activeGraphKind`), so a stale target
+ *  (its layer removed, its mask removed, or the active layer switched away
+ *  from underneath it) self-heals back to `'layer'` rather than pointing at
+ *  nothing. */
+export type EditingTarget = { kind: 'layer' } | { kind: 'mask'; layerId: string };
+
+/** Whether the canvas is currently showing the active layer's mask graph or
+ *  its main graph. The one place that decides this, so `activeGraph`,
+ *  `withActiveGraph` and the UI (breadcrumb, layer-stack mask control) can
+ *  never disagree. */
+export function activeGraphKind(doc: ShaderDocument, editingTarget: EditingTarget): 'layer' | 'mask' {
+  const layer = activeLayer(doc);
+  return editingTarget.kind === 'mask' && editingTarget.layerId === layer.id && !!layer.maskGraph
+    ? 'mask'
+    : 'layer';
+}
+
+/** The graph currently being edited: the active layer's main graph, unless
+ *  `editingTarget` names its mask (see `activeGraphKind`). `editingTarget`
+ *  defaults to the LIVE store value (evaluated per call, not memoized) —
+ *  pre-existing single-argument callers (`Inspector.tsx`, the store's own
+ *  tests) keep reading `activeGraph(doc)` unmodified and still resolve
+ *  against whichever graph the canvas actually has open. Reactive callers
+ *  that need a re-render on `editingTarget` changes alone (e.g.
+ *  `GraphCanvas.tsx`) should still subscribe to it explicitly and pass it
+ *  in, since a default-parameter read does not itself trigger React updates. */
+export function activeGraph(
+  doc: ShaderDocument,
+  editingTarget: EditingTarget = useEditorStore.getState().editingTarget,
+): ShaderGraph {
+  const layer = activeLayer(doc);
+  return activeGraphKind(doc, editingTarget) === 'mask' ? (layer.maskGraph as ShaderGraph) : layer.graph;
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────
@@ -67,19 +100,24 @@ function touch(doc: ShaderDocument): ShaderDocument {
   return { ...doc, meta: { ...doc.meta, updated: new Date().toISOString() } };
 }
 
-/** Replace the active layer's graph immutably. `fn` returns `null` to abort. */
+/** Replace the currently EDITED graph immutably — the active layer's
+ *  `maskGraph` while `editingTarget` names it (per `activeGraphKind`),
+ *  otherwise its main `graph`. `fn` returns `null` to abort. */
 function withActiveGraph(
   doc: ShaderDocument,
+  editingTarget: EditingTarget,
   fn: (graph: ShaderGraph) => ShaderGraph | null,
 ): ShaderDocument | null {
   const id = activeLayerId(doc);
   const index = doc.layerStack.layers.findIndex((l) => l.id === id);
   if (index < 0) return null;
   const layer = doc.layerStack.layers[index];
-  const nextGraph = fn(layer.graph);
-  if (!nextGraph || nextGraph === layer.graph) return null;
+  const editingMask = activeGraphKind(doc, editingTarget) === 'mask';
+  const currentGraph = editingMask ? (layer.maskGraph as ShaderGraph) : layer.graph;
+  const nextGraph = fn(currentGraph);
+  if (!nextGraph || nextGraph === currentGraph) return null;
   const layers = doc.layerStack.layers.slice();
-  layers[index] = { ...layer, graph: nextGraph };
+  layers[index] = editingMask ? { ...layer, maskGraph: nextGraph } : { ...layer, graph: nextGraph };
   return touch({ ...doc, layerStack: { ...doc.layerStack, layers } });
 }
 
@@ -162,6 +200,27 @@ export interface EditorStore {
    *  No-op at either end of the stack. Never touches `selectedNodeIds`. */
   reorderLayer: (id: string, direction: StackDirection) => void;
 
+  // Masks (a layer's optional secondary graph; see `EditingTarget`)
+  /** Which graph `activeGraph`/`GraphCanvas` currently show: the active
+   *  layer's main graph, or (while it still applies) one of its masks. See
+   *  `EditingTarget` and `activeGraphKind`. */
+  editingTarget: EditingTarget;
+  /** Give `id` an empty mask graph (a lone `output.mask` node — see
+   *  `emptyMaskGraph`) and switch the canvas to editing it. No-op if the
+   *  layer already has one; use `enterMaskEditing` to switch to an existing
+   *  mask instead. */
+  addMaskToLayer: (id: string) => void;
+  /** Delete `id`'s mask graph entirely. If it was the one being edited, the
+   *  canvas falls back to that layer's main graph. */
+  removeMaskFromLayer: (id: string) => void;
+  /** Switch the canvas to editing `id`'s mask graph (and make `id` the
+   *  active layer, if it was not already). Fails via `lastError` if the
+   *  layer has no mask yet — call `addMaskToLayer` first. */
+  enterMaskEditing: (layerId: string) => void;
+  /** Switch the canvas back to the active layer's main graph. No-op if
+   *  already there. */
+  exitMaskEditing: () => void;
+
   // Editor / document
   selectNodes: (ids: string[]) => void;
   loadDocument: (doc: ShaderDocument) => void;
@@ -180,6 +239,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   doc: initialDocument(),
   selectedNodeIds: [],
   lastError: null,
+  editingTarget: { kind: 'layer' },
   previewRenderer: null,
   setPreviewRenderer(renderer) {
     set({ previewRenderer: renderer });
@@ -210,7 +270,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       params: def.params ? deepClone(def.params) : [],
       previewEnabled: def.previewable ?? false,
     };
-    const doc = withActiveGraph(get().doc, (graph) => ({
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => ({
       ...graph,
       nodes: [...graph.nodes, node],
     }));
@@ -225,7 +285,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   removeNodes(ids) {
     if (ids.length === 0) return;
     let blocked = false;
-    const doc = withActiveGraph(get().doc, (graph) => {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
       // The output node is the graph's result — it can never be deleted.
       const removable = new Set(
         ids.filter((id) => {
@@ -258,7 +318,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   moveNode(id, position) {
-    const doc = withActiveGraph(get().doc, (graph) => {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
       const index = graph.nodes.findIndex((n) => n.id === id);
       if (index < 0) return null;
       const next = graph.nodes.slice();
@@ -269,7 +329,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   connect(source, target) {
-    const graph = activeGraph(get().doc);
+    const graph = activeGraph(get().doc, get().editingTarget);
     const verdict = validateConnection(graph, source, target, socketLookup(graph));
     if (!verdict.ok) {
       set({ lastError: verdict.message });
@@ -280,7 +340,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       source: { node: source.node, socket: source.socket },
       target: { node: target.node, socket: target.socket },
     };
-    const doc = withActiveGraph(get().doc, (g) => ({ ...g, edges: [...g.edges, edge] }));
+    const doc = withActiveGraph(get().doc, get().editingTarget, (g) => ({ ...g, edges: [...g.edges, edge] }));
     if (!doc) {
       const failure: ConnectionCheck = {
         ok: false,
@@ -295,7 +355,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   disconnect(edgeId) {
-    const doc = withActiveGraph(get().doc, (graph) => {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
       if (!graph.edges.some((e) => e.id === edgeId)) return null;
       return { ...graph, edges: graph.edges.filter((e) => e.id !== edgeId) };
     });
@@ -303,7 +363,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   setParam(nodeId, paramId, value) {
-    const doc = withActiveGraph(get().doc, (graph) => {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
       const index = graph.nodes.findIndex((n) => n.id === nodeId);
       if (index < 0) return null;
       const node = graph.nodes[index];
@@ -320,7 +380,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   setParamExposed(nodeId, paramId, exposed) {
-    const doc = withActiveGraph(get().doc, (graph) => {
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => {
       const index = graph.nodes.findIndex((n) => n.id === nodeId);
       if (index < 0) return null;
       const node = graph.nodes[index];
@@ -346,6 +406,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (doc.layerStack.activeLayerId === id) return;
     set({
       doc: touch({ ...doc, layerStack: { ...doc.layerStack, activeLayerId: id } }),
+      // Picking a layer directly means "edit ITS main graph" (see
+      // `LayerStack.tsx`'s name button) — never leaves a stale mask target
+      // from whichever layer was active before pointed at the wrong layer.
+      editingTarget: { kind: 'layer' },
       selectedNodeIds: [],
       lastError: null,
     });
@@ -363,6 +427,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           activeLayerId: layer.id,
         },
       }),
+      editingTarget: { kind: 'layer' },
       selectedNodeIds: [],
       lastError: null,
     });
@@ -384,6 +449,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const nextLayers = layers.filter((l) => l.id !== id);
     const wasActive = activeLayerId(doc) === id;
     const fallback = nextLayers[Math.min(index, nextLayers.length - 1)].id;
+    const editingTarget = get().editingTarget;
+    // A mask target pointing at the deleted layer is now meaningless even if
+    // that layer was not the active one (shouldn't normally happen, since
+    // entering mask editing also activates its layer, but stay defensive).
+    const staleTarget = wasActive || (editingTarget.kind === 'mask' && editingTarget.layerId === id);
     set({
       doc: touch({
         ...doc,
@@ -393,6 +463,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           activeLayerId: wasActive ? fallback : doc.layerStack.activeLayerId,
         },
       }),
+      editingTarget: staleTarget ? { kind: 'layer' } : editingTarget,
       selectedNodeIds: wasActive ? [] : get().selectedNodeIds,
       lastError: null,
     });
@@ -423,16 +494,101 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     });
   },
 
+  addMaskToLayer(id) {
+    const doc = get().doc;
+    const index = doc.layerStack.layers.findIndex((l) => l.id === id);
+    if (index < 0) {
+      set({ lastError: `No layer "${id}".` });
+      return;
+    }
+    const layer = doc.layerStack.layers[index];
+    if (layer.maskGraph) {
+      // Already has one — treat as "go edit it" rather than an error.
+      get().enterMaskEditing(id);
+      return;
+    }
+    const layers = doc.layerStack.layers.slice();
+    layers[index] = { ...layer, maskGraph: emptyMaskGraph() };
+    set({
+      doc: touch({
+        ...doc,
+        layerStack: { ...doc.layerStack, layers, activeLayerId: id },
+      }),
+      editingTarget: { kind: 'mask', layerId: id },
+      selectedNodeIds: [],
+      lastError: null,
+    });
+  },
+
+  removeMaskFromLayer(id) {
+    const doc = get().doc;
+    const index = doc.layerStack.layers.findIndex((l) => l.id === id);
+    if (index < 0) {
+      set({ lastError: `No layer "${id}".` });
+      return;
+    }
+    const layer = doc.layerStack.layers[index];
+    if (!layer.maskGraph) return;
+    const { maskGraph: _removed, ...withoutMask } = layer;
+    const layers = doc.layerStack.layers.slice();
+    layers[index] = withoutMask;
+    const editingTarget = get().editingTarget;
+    const wasEditingThisMask = editingTarget.kind === 'mask' && editingTarget.layerId === id;
+    set({
+      doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      editingTarget: wasEditingThisMask ? { kind: 'layer' } : editingTarget,
+      selectedNodeIds: wasEditingThisMask ? [] : get().selectedNodeIds,
+      lastError: null,
+    });
+  },
+
+  enterMaskEditing(layerId) {
+    const doc = get().doc;
+    const layer = doc.layerStack.layers.find((l) => l.id === layerId);
+    if (!layer) {
+      set({ lastError: `No layer "${layerId}".` });
+      return;
+    }
+    if (!layer.maskGraph) {
+      set({ lastError: `Layer "${layer.name}" has no mask yet.` });
+      return;
+    }
+    const alreadyActive = activeLayerId(doc) === layerId;
+    set({
+      doc: alreadyActive
+        ? doc
+        : touch({ ...doc, layerStack: { ...doc.layerStack, activeLayerId: layerId } }),
+      editingTarget: { kind: 'mask', layerId },
+      selectedNodeIds: [],
+      lastError: null,
+    });
+  },
+
+  exitMaskEditing() {
+    if (get().editingTarget.kind === 'layer') return;
+    set({ editingTarget: { kind: 'layer' }, selectedNodeIds: [], lastError: null });
+  },
+
   selectNodes(ids) {
     set({ selectedNodeIds: [...ids] });
   },
 
   loadDocument(doc) {
-    set({ doc: withActiveLayerSet(doc), selectedNodeIds: [], lastError: null });
+    set({
+      doc: withActiveLayerSet(doc),
+      editingTarget: { kind: 'layer' },
+      selectedNodeIds: [],
+      lastError: null,
+    });
   },
 
   newDocument(name) {
-    set({ doc: initialDocument(name), selectedNodeIds: [], lastError: null });
+    set({
+      doc: initialDocument(name),
+      editingTarget: { kind: 'layer' },
+      selectedNodeIds: [],
+      lastError: null,
+    });
   },
 
   renameDocument(name) {
