@@ -16,7 +16,7 @@
 // the preview runtime is what binds the result to a device.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { ShaderDocument, ShaderGraph, ShaderNode, SocketType } from '../model/document';
+import type { ShaderDocument, ShaderGraph, ShaderNode, SocketType, SubGraph } from '../model/document';
 
 export type TargetLang = 'glsl-es' | 'glsl3' | 'wgsl' | 'tsl';
 
@@ -89,6 +89,12 @@ export interface CompileOptions {
   /** Emit debug annotations / source map. */
   debug?: boolean;
   precision?: 'highp' | 'mediump';
+  /** Subgraph definitions a `ShaderNode.subGraphId` instance may reference,
+   *  threaded into `lowerGraph` so subgraph instances inline correctly.
+   *  Callers that already have the owning `ShaderDocument` in scope should
+   *  pass `doc.subGraphs`; defaults to `[]` (no subgraph instances resolve)
+   *  when omitted. */
+  subGraphs?: SubGraph[];
 }
 
 /** Backends self-register here; the UI picks a target and the same document
