@@ -7,13 +7,23 @@
 // showing a mask, a breadcrumb (`GraphBreadcrumb`) offers a one-click way
 // back. The canvas holds no graph state of its own: `nodes`/`edges` are
 // projected from the document on every render, and every gesture is
-// translated back into a store action. The one exception is edge
-// *selection*, which is view-only state the document has no field for.
+// translated back into a store action. The exceptions are edge *selection*
+// and group/frame *selection*, view-only state the document has no field for.
 //
 // Connection legality is never decided here. `isValidConnection` and the
 // post-drop message both call the model's `validateConnection`, so the canvas
 // and the store can never disagree about what is legal, and the user sees the
 // model's own reason ("Cannot connect vec2 to float.") rather than a guess.
+//
+// Groups/frames (`NodeGroup`) are a SECOND React Flow node type
+// (`GROUP_NODE_TYPE`, id-namespaced via `frameNodeId` so it can never collide
+// with a `ShaderNode` id — see `project.ts`) merged into the same `nodes`
+// array ahead of the shader nodes, so with no explicit `zIndex` on either
+// type React Flow's array-order stacking renders them behind their members.
+// `onNodesChange` demultiplexes by id: frame changes update `NodeGroup`
+// bounds/selection/removal, shader-node changes behave exactly as before,
+// and a shader node's drag-end additionally re-tests its center point against
+// every frame's bounds (`groupContaining`) to update its `groupId`.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import {
@@ -46,22 +56,29 @@ import { validateConnection } from '../../model/connect';
 import { activeGraph, activeGraphKind, activeLayer, activeLayerId, useEditorStore } from '../store';
 import { notify } from '../notice';
 import { AddNodePalette } from './AddNodePalette';
+import { boundsForNodes, groupContaining, FALLBACK_NODE_SIZE, type NodeRect } from './groupBounds';
 import { GraphBreadcrumb } from './GraphBreadcrumb';
+import { GroupFrameNode } from './GroupFrameNode';
 import { cascadeOffset } from './paletteCascade';
 import { ShaderNodeCard } from './ShaderNodeCard';
 import { SocketLegend } from './SocketLegend';
 import { registrySocketLookup } from './socketLookup';
 import {
   endpointsFrom,
+  findGroup,
+  GROUP_NODE_TYPE,
+  groupIdFromFrameNodeId,
   SHADER_NODE_TYPE,
   toFlowEdges,
+  toFlowGroups,
   toFlowNodes,
+  type GroupFlowNode,
   type ShaderFlowEdge,
   type ShaderFlowNode,
 } from './project';
 
 /** Stable across renders — React Flow warns (and remounts nodes) otherwise. */
-const nodeTypes: NodeTypes = { [SHADER_NODE_TYPE]: ShaderNodeCard };
+const nodeTypes: NodeTypes = { [SHADER_NODE_TYPE]: ShaderNodeCard, [GROUP_NODE_TYPE]: GroupFrameNode };
 
 /** Shared by the initial fit and the Controls button, so both frame the graph
  *  the same way. Without the zoom cap, a fresh document's single output node
@@ -84,6 +101,10 @@ function GraphCanvasInner() {
   const selectNodes = useEditorStore((s) => s.selectNodes);
   const editingTarget = useEditorStore((s) => s.editingTarget);
   const exitMaskEditing = useEditorStore((s) => s.exitMaskEditing);
+  const createGroup = useEditorStore((s) => s.createGroup);
+  const setGroupBounds = useEditorStore((s) => s.setGroupBounds);
+  const removeGroup = useEditorStore((s) => s.removeGroup);
+  const setNodeGroup = useEditorStore((s) => s.setNodeGroup);
 
   const graph = activeGraph(doc, editingTarget);
   const layerId = activeLayerId(doc);
@@ -91,14 +112,19 @@ function GraphCanvasInner() {
   const layer = activeLayer(doc);
   const lookup = useMemo(() => registrySocketLookup(graph), [graph]);
 
-  // Edge selection is editor-only: the document has no place for it. Reset on
-  // any switch of WHICH graph is showing — a new active layer, or diving into
-  // / out of that layer's mask (same layerId, different graph).
+  // Edge and group/frame selection are editor-only: the document has no place
+  // for either. Reset on any switch of WHICH graph is showing — a new active
+  // layer, or diving into / out of that layer's mask (same layerId, different
+  // graph).
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
-  useEffect(() => setSelectedEdgeIds([]), [layerId, viewingMask]);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+  useEffect(() => {
+    setSelectedEdgeIds([]);
+    setSelectedGroupIds([]);
+  }, [layerId, viewingMask]);
 
   const [palette, setPalette] = useState<PalettePosition | null>(null);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getInternalNode } = useReactFlow();
   const wrapper = useRef<HTMLElement>(null);
   // Counts toolbar opens so far, so successive "+ Add node" clicks fan out
   // from the pane center instead of landing on the exact same spot. Pointer-
@@ -113,7 +139,12 @@ function GraphCanvasInner() {
   const lookupRef = useRef(lookup);
   lookupRef.current = lookup;
 
-  const rfNodes = useMemo(() => toFlowNodes(graph, selectedNodeIds), [graph, selectedNodeIds]);
+  // Frames listed FIRST — see the file header on why that renders them behind
+  // their member shader nodes.
+  const rfNodes = useMemo(
+    () => [...toFlowGroups(graph, selectedGroupIds), ...toFlowNodes(graph, selectedNodeIds)],
+    [graph, selectedGroupIds, selectedNodeIds],
+  );
   const rfEdges = useMemo(
     () => toFlowEdges(graph, selectedEdgeIds, lookup),
     [graph, selectedEdgeIds, lookup],
@@ -121,14 +152,74 @@ function GraphCanvasInner() {
 
   // ── Gestures → store ────────────────────────────────────────────────────
 
+  /** After a shader node's drag ends, re-test its center point against every
+   *  frame's bounds and update its `groupId` if membership changed — "drag a
+   *  node into/out of a frame" from the DoD. Reads the freshest position/size
+   *  React Flow measured for it (`getInternalNode`), not the (possibly
+   *  stale-until-next-render) document position. */
+  const reassignDraggedGroups = useCallback(
+    (ids: Iterable<string>) => {
+      const current = graphRef.current;
+      const groups = current.groups ?? [];
+      for (const id of ids) {
+        const node = current.nodes.find((n) => n.id === id);
+        const internal = getInternalNode(id);
+        if (!node || !internal) continue;
+        const rect: NodeRect = {
+          id,
+          x: internal.internals.positionAbsolute.x,
+          y: internal.internals.positionAbsolute.y,
+          width: internal.measured?.width ?? FALLBACK_NODE_SIZE.width,
+          height: internal.measured?.height ?? FALLBACK_NODE_SIZE.height,
+        };
+        const nextGroupId = groupContaining(rect, groups);
+        if (nextGroupId !== node.groupId) setNodeGroup(id, nextGroupId);
+      }
+    },
+    [getInternalNode, setNodeGroup],
+  );
+
   const onNodesChange = useCallback(
-    (changes: NodeChange<ShaderFlowNode>[]) => {
+    (changes: NodeChange<ShaderFlowNode | GroupFlowNode>[]) => {
       const removed: string[] = [];
       let selection: Set<string> | null = null;
+      const draggedEnded = new Set<string>();
+
+      const groupPatches = new Map<string, { x?: number; y?: number; w?: number; h?: number }>();
+      const removedGroupIds: string[] = [];
+      let groupSelection: Set<string> | null = null;
 
       for (const change of changes) {
+        // Never actually emitted by this canvas (nodes only ever arrive via
+        // store-driven re-renders, not `addNodes`), but `NodeAddChange` has no
+        // `id` — narrow it away before any `change.id` access below.
+        if (change.type === 'add') continue;
+        const groupId = groupIdFromFrameNodeId(change.id);
+        if (groupId) {
+          if (change.type === 'position' && change.position) {
+            groupPatches.set(groupId, {
+              ...groupPatches.get(groupId),
+              x: change.position.x,
+              y: change.position.y,
+            });
+          } else if (change.type === 'dimensions' && change.dimensions) {
+            groupPatches.set(groupId, {
+              ...groupPatches.get(groupId),
+              w: change.dimensions.width,
+              h: change.dimensions.height,
+            });
+          } else if (change.type === 'remove') {
+            removedGroupIds.push(groupId);
+          } else if (change.type === 'select') {
+            groupSelection ??= new Set(selectedGroupIds);
+            if (change.selected) groupSelection.add(groupId);
+            else groupSelection.delete(groupId);
+          }
+          continue;
+        }
         if (change.type === 'position' && change.position) {
           moveNode(change.id, change.position);
+          if (change.dragging === false) draggedEnded.add(change.id);
         } else if (change.type === 'remove') {
           removed.push(change.id);
         } else if (change.type === 'select') {
@@ -138,10 +229,18 @@ function GraphCanvasInner() {
         }
       }
 
+      for (const [groupId, patch] of groupPatches) {
+        const bounds = findGroup(graphRef.current, groupId)?.bounds;
+        if (bounds) setGroupBounds(groupId, { ...bounds, ...patch });
+      }
+      for (const groupId of removedGroupIds) removeGroup(groupId);
+      if (groupSelection) setSelectedGroupIds([...groupSelection]);
+
       if (selection) selectNodes([...selection]);
       if (removed.length > 0) removeNodes(removed);
+      if (draggedEnded.size > 0) reassignDraggedGroups(draggedEnded);
     },
-    [moveNode, removeNodes, selectNodes],
+    [moveNode, removeNodes, selectNodes, selectedGroupIds, setGroupBounds, removeGroup, reassignDraggedGroups],
   );
 
   const onEdgesChange = useCallback(
@@ -248,23 +347,56 @@ function GraphCanvasInner() {
     openPaletteAt(centerX + offset.dx, centerY + offset.dy);
   }, [openPaletteAt]);
 
+  // ── Groups / frames ─────────────────────────────────────────────────────
+
+  /** Toolbar action + Cmd/Ctrl+G: frame the current multi-selection. Reads
+   *  live positions/sizes via `getInternalNode` rather than the (layout-free)
+   *  document position, so the frame tightly wraps what is actually on
+   *  screen. No-op under two selected nodes — see `createGroup`. */
+  const groupSelectedNodes = useCallback(() => {
+    const ids = useEditorStore.getState().selectedNodeIds;
+    if (ids.length < 2) return;
+    const rects: NodeRect[] = ids.map((id) => {
+      const internal = getInternalNode(id);
+      return {
+        id,
+        x: internal?.internals.positionAbsolute.x ?? 0,
+        y: internal?.internals.positionAbsolute.y ?? 0,
+        width: internal?.measured?.width ?? FALLBACK_NODE_SIZE.width,
+        height: internal?.measured?.height ?? FALLBACK_NODE_SIZE.height,
+      };
+    });
+    const bounds = boundsForNodes(rects);
+    if (!bounds) return;
+    const groupId = createGroup(ids, bounds);
+    if (groupId) setSelectedGroupIds([groupId]);
+  }, [createGroup, getInternalNode]);
+
   // The output node is not deletable, so React Flow never proposes removing it
   // and never cascade-deletes its edges. Say why instead of failing silently.
-  // Window-level, because the delete gesture can originate from the pane, a
-  // node, or the minimap — but never from a field the user is typing into.
+  // Also handles Cmd/Ctrl+G to group the selection, mirroring the toolbar
+  // button. Window-level, because both gestures can originate from the pane,
+  // a node, or the minimap — but never from a field the user is typing into.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
-      if (useEditorStore.getState().selectedNodeIds.includes(graphRef.current.outputNodeId)) {
-        notify('The output node cannot be deleted.');
+
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (useEditorStore.getState().selectedNodeIds.includes(graphRef.current.outputNodeId)) {
+          notify('The output node cannot be deleted.');
+        }
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'g') {
+        event.preventDefault();
+        groupSelectedNodes();
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [groupSelectedNodes]);
 
   return (
     <section className="sg-graph" aria-label="Node graph" ref={wrapper} onDoubleClick={onDoubleClick}>
@@ -301,6 +433,15 @@ function GraphCanvasInner() {
         <Panel position="top-left" className="sg-graph__toolbar">
           <button type="button" className="sg-btn" onClick={openPaletteFromToolbar}>
             + Add node
+          </button>
+          <button
+            type="button"
+            className="sg-btn"
+            onClick={groupSelectedNodes}
+            disabled={selectedNodeIds.length < 2}
+            title="Frame the selected nodes into a group (Cmd/Ctrl+G)"
+          >
+            Group
           </button>
           <span className="sg-graph__meta">
             {graph.nodes.length} nodes · {graph.edges.length} links
