@@ -1,11 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ShadeGraph — Node graph canvas
 // ───────────────────────────────────────────────────────────────────────────
-// React Flow bound to the editor store, always editing the ACTIVE LAYER's graph.
-// The canvas holds no graph state of its own: `nodes`/`edges` are projected from
-// the document on every render, and every gesture is translated back into a
-// store action. The one exception is edge *selection*, which is view-only state
-// the document has no field for.
+// React Flow bound to the editor store, editing whichever graph the store's
+// `editingTarget` currently names — the active layer's main graph, or (while
+// dived into one) its mask graph, via `activeGraph`/`activeGraphKind`. When
+// showing a mask, a breadcrumb (`GraphBreadcrumb`) offers a one-click way
+// back. The canvas holds no graph state of its own: `nodes`/`edges` are
+// projected from the document on every render, and every gesture is
+// translated back into a store action. The one exception is edge
+// *selection*, which is view-only state the document has no field for.
 //
 // Connection legality is never decided here. `isValidConnection` and the
 // post-drop message both call the model's `validateConnection`, so the canvas
@@ -40,9 +43,10 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import { validateConnection } from '../../model/connect';
-import { activeGraph, activeLayerId, useEditorStore } from '../store';
+import { activeGraph, activeGraphKind, activeLayer, activeLayerId, useEditorStore } from '../store';
 import { notify } from '../notice';
 import { AddNodePalette } from './AddNodePalette';
+import { GraphBreadcrumb } from './GraphBreadcrumb';
 import { cascadeOffset } from './paletteCascade';
 import { ShaderNodeCard } from './ShaderNodeCard';
 import { SocketLegend } from './SocketLegend';
@@ -78,14 +82,20 @@ function GraphCanvasInner() {
   const connect = useEditorStore((s) => s.connect);
   const disconnect = useEditorStore((s) => s.disconnect);
   const selectNodes = useEditorStore((s) => s.selectNodes);
+  const editingTarget = useEditorStore((s) => s.editingTarget);
+  const exitMaskEditing = useEditorStore((s) => s.exitMaskEditing);
 
-  const graph = activeGraph(doc);
+  const graph = activeGraph(doc, editingTarget);
   const layerId = activeLayerId(doc);
+  const viewingMask = activeGraphKind(doc, editingTarget) === 'mask';
+  const layer = activeLayer(doc);
   const lookup = useMemo(() => registrySocketLookup(graph), [graph]);
 
-  // Edge selection is editor-only: the document has no place for it.
+  // Edge selection is editor-only: the document has no place for it. Reset on
+  // any switch of WHICH graph is showing — a new active layer, or diving into
+  // / out of that layer's mask (same layerId, different graph).
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
-  useEffect(() => setSelectedEdgeIds([]), [layerId]);
+  useEffect(() => setSelectedEdgeIds([]), [layerId, viewingMask]);
 
   const [palette, setPalette] = useState<PalettePosition | null>(null);
   const { screenToFlowPosition } = useReactFlow();
@@ -299,6 +309,11 @@ function GraphCanvasInner() {
         <Panel position="top-right">
           <SocketLegend />
         </Panel>
+        {viewingMask ? (
+          <Panel position="top-center">
+            <GraphBreadcrumb layerName={layer.name} onExit={exitMaskEditing} />
+          </Panel>
+        ) : null}
       </ReactFlow>
 
       {/* The output node is mandatory and undeletable (`emptyGraph()`), so a
