@@ -33,32 +33,47 @@ interface StructuralNode {
   bypassed: boolean;
 }
 
-interface StructuralLayer {
-  id: string;
-  blend: string;
-  enabled: boolean;
-  soloed: boolean;
-  maskGraphId: string | null;
+interface StructuralGraph {
   outputNodeId: string;
   nodes: StructuralNode[];
   edges: string[];
 }
 
+interface StructuralLayer {
+  id: string;
+  blend: string;
+  enabled: boolean;
+  soloed: boolean;
+  maskGraph: StructuralGraph | null;
+  outputNodeId: string;
+  nodes: StructuralNode[];
+  edges: string[];
+}
+
+// Node/edge order inside one graph never changes compiled semantics
+// (`resolveOrder` topologically sorts independently) — sorted so a no-op
+// array reshuffle can never look like a topology change.
+function structuralGraph(graph: ShaderDocument['layerStack']['layers'][number]['graph']): StructuralGraph {
+  return {
+    outputNodeId: graph.outputNodeId,
+    nodes: graph.nodes
+      .map((n) => ({ id: n.id, type: n.type, bypassed: n.bypassed ?? false }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    edges: [...graph.edges.map((e) => e.id)].sort(),
+  };
+}
+
 function structuralLayer(layer: ShaderDocument['layerStack']['layers'][number]): StructuralLayer {
+  const graph = structuralGraph(layer.graph);
   return {
     id: layer.id,
     blend: layer.blend,
     enabled: layer.enabled,
     soloed: layer.soloed ?? false,
-    maskGraphId: layer.maskGraphId ?? null,
-    outputNodeId: layer.graph.outputNodeId,
-    // Node/edge order inside one graph never changes compiled semantics
-    // (`resolveOrder` topologically sorts independently) — sorted so a
-    // no-op array reshuffle can never look like a topology change.
-    nodes: layer.graph.nodes
-      .map((n) => ({ id: n.id, type: n.type, bypassed: n.bypassed ?? false }))
-      .sort((a, b) => a.id.localeCompare(b.id)),
-    edges: [...layer.graph.edges.map((e) => e.id)].sort(),
+    maskGraph: layer.maskGraph ? structuralGraph(layer.maskGraph) : null,
+    outputNodeId: graph.outputNodeId,
+    nodes: graph.nodes,
+    edges: graph.edges,
   };
 }
 

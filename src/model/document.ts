@@ -183,8 +183,13 @@ export interface ShaderLayer {
   visible: boolean;
   /** Solo: when any layer is soloed, only soloed layers composite. */
   soloed?: boolean;
-  /** Optional per-layer mask graph. */
-  maskGraphId?: string;
+  /** Optional per-layer mask graph: a narrow `ShaderGraph` (not a full typed
+   *  `SubGraph` — no reuse/instancing) that terminates at an `output.mask`
+   *  node instead of `output.surface`. Its single float result is multiplied
+   *  per-pixel into this layer's contribution during compositing, alongside
+   *  the existing opacity uniform. Inline, not an id into a shared collection,
+   *  since a mask is a 1:1 property of one layer. */
+  maskGraph?: ShaderGraph;
 }
 
 export interface LayerStack {
