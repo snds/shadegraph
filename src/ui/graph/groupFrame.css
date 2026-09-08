@@ -1,0 +1,54 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — group/frame node
+   Imported by `GroupFrameNode.tsx`, not the shared shell sheet: same
+   per-file-owns-its-styles pattern as `graphBreadcrumb.css`. Only shell
+   tokens used, tinted by the group's own color (inline style).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-frame {
+  width: 100%; height: 100%;
+  border: 2px dashed var(--sg-accent);
+  border-radius: var(--sg-radius);
+  box-sizing: border-box;
+  pointer-events: none; /* only the header + resize handles are interactive */
+}
+
+.sg-frame[data-selected] {
+  border-style: solid;
+}
+
+.sg-frame__head {
+  pointer-events: all;
+  position: absolute; top: -28px; left: -2px;
+  display: flex; align-items: center; gap: 6px;
+  max-width: calc(100% + 4px);
+  padding: 3px 6px;
+  background: var(--sg-panel);
+  border: 1px solid var(--sg-line);
+  border-radius: 4px 4px 0 0;
+  cursor: grab;
+}
+.sg-frame__head:active { cursor: grabbing; }
+
+.sg-frame__title {
+  font-size: 11px; font-weight: 600; color: var(--sg-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.sg-frame__title-input {
+  font: inherit; font-size: 11px; font-weight: 600; color: var(--sg-text);
+  background: var(--sg-raised); border: 1px solid var(--sg-accent); border-radius: 3px;
+  padding: 1px 4px; width: 140px;
+}
+
+.sg-frame__swatch {
+  width: 16px; height: 16px; padding: 0; border: 1px solid var(--sg-line); border-radius: 3px;
+  background: transparent; cursor: pointer;
+}
+
+.sg-frame__delete {
+  font: inherit; line-height: 1; color: var(--sg-dim); background: transparent;
+  border: 0; cursor: pointer; padding: 0 2px;
+}
+.sg-frame__delete:hover { color: var(--sg-danger); }
