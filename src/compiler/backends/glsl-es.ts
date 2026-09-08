@@ -363,7 +363,7 @@ function compileGraph(
     ? { ...graph, outputNodeId: opts.previewNodeId }
     : graph;
 
-  const result = lowerGraph(effectiveGraph, registry, HOOKS, handle.sink);
+  const result = lowerGraph(effectiveGraph, registry, HOOKS, handle.sink, opts?.subGraphs ?? []);
 
   if (opts?.previewNodeId && result.outputExpr !== undefined) {
     const node = graph.nodes.find((n) => n.id === opts.previewNodeId);
@@ -425,7 +425,7 @@ function compileDocument(
         ],
       };
     }
-    return compileGraph(owner.graph, opts, registry);
+    return compileGraph(owner.graph, { ...opts, subGraphs: doc.subGraphs }, registry);
   }
 
   if (opts?.previewLayerId) {
@@ -447,7 +447,7 @@ function compileDocument(
     // Isolated single-layer preview bypasses compositing entirely, per
     // `CompileOptions.previewLayerId`'s contract ("preview only this layer").
     const { previewLayerId: _drop, ...rest } = opts;
-    return compileGraph(layer.graph, rest, registry);
+    return compileGraph(layer.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
   }
 
   const soloed = doc.layerStack.layers.filter((l) => l.soloed);
@@ -459,7 +459,7 @@ function compileDocument(
 
   for (const layer of participating) {
     const bodyOffset = handle.body.length;
-    const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink);
+    const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink, doc.subGraphs);
     for (const entry of result.sourceMap) {
       relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
     }
@@ -488,7 +488,7 @@ function compileDocument(
     let opacityExpr = opacityUniform;
     if (layer.maskGraph) {
       const maskBodyOffset = handle.body.length;
-      const maskResult = lowerGraph(layer.maskGraph, registry, HOOKS, handle.sink);
+      const maskResult = lowerGraph(layer.maskGraph, registry, HOOKS, handle.sink, doc.subGraphs);
       for (const entry of maskResult.sourceMap) {
         relativeSourceMap.push({ line: maskBodyOffset + entry.line, nodeId: entry.nodeId });
       }
