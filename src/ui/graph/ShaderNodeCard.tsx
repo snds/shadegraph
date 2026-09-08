@@ -19,6 +19,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react';
 
 import type { Diagnostic } from '../../compiler/backend';
 import type { Socket } from '../../model/document';
+import { findSubGraph } from '../../model/subgraph';
 import { nodes } from '../../nodes/registry';
 import type { PreviewScheduler } from '../../preview/scheduler';
 import { useEditorStore } from '../store';
@@ -178,7 +179,80 @@ function NodeDiagnosticBadge({ nodeId }: { nodeId: string }) {
   );
 }
 
-export function ShaderNodeCard({ id, data, selected }: NodeProps<ShaderFlowNode>) {
+/** A subgraph-instance node's card: sockets come from the referenced
+ *  `SubGraph.inputs`/`outputs` LIVE (via a `useEditorStore` selector on
+ *  `doc.subGraphs`, never copied), so editing the subgraph's interface
+ *  updates this card immediately with no extra plumbing — the special-cased
+ *  counterpart to the registry-backed card below it. */
+function SubGraphInstanceCard({ data, selected }: NodeProps<ShaderFlowNode>) {
+  const subGraphs = useEditorStore((s) => s.doc.subGraphs);
+  const enterSubGraphEditing = useEditorStore((s) => s.enterSubGraphEditing);
+  const subGraph = findSubGraph(subGraphs, data.subGraphId);
+
+  if (!subGraph) {
+    return (
+      <div className="sg-node sg-node--unknown" data-selected={selected || undefined}>
+        <header className="sg-node__head">
+          <span className="sg-node__title">Unknown subgraph</span>
+        </header>
+        <div className="sg-node__body">
+          <code>{data.subGraphId ?? '(none)'}</code> is not in this document.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="sg-node sg-node--subgraph"
+      data-selected={selected || undefined}
+      data-bypassed={data.bypassed || undefined}
+      title={`Subgraph: ${subGraph.name}`}
+    >
+      <header className="sg-node__head">
+        <span className="sg-node__title">{data.title ?? subGraph.name}</span>
+        <span className="sg-node__cat">subgraph</span>
+      </header>
+
+      <div className="sg-node__sockets">
+        {subGraph.outputs.length > 0 ? (
+          <div className="sg-node__group sg-node__group--out">
+            {subGraph.outputs.map((s) => (
+              <SocketRow key={`out:${s.id}`} socket={s} direction="out" />
+            ))}
+          </div>
+        ) : null}
+        {subGraph.inputs.length > 0 ? (
+          <div className="sg-node__group sg-node__group--in">
+            {subGraph.inputs.map((s) => (
+              <SocketRow key={`in:${s.id}`} socket={s} direction="in" />
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <footer className="sg-node__pin">
+        <button
+          type="button"
+          className="sg-node__dive-in nodrag"
+          onClick={() => enterSubGraphEditing(subGraph.id)}
+          title={`Edit "${subGraph.name}"'s internals`}
+        >
+          Edit subgraph →
+        </button>
+      </footer>
+    </div>
+  );
+}
+
+export function ShaderNodeCard(props: NodeProps<ShaderFlowNode>) {
+  if (props.data.subGraphId !== undefined) return <SubGraphInstanceCard {...props} />;
+  return <RegistryNodeCard {...props} />;
+}
+
+/** Every non-subgraph node: sockets/params read live from the registry
+ *  definition by `data.shaderType`, per the file header. */
+function RegistryNodeCard({ id, data, selected }: NodeProps<ShaderFlowNode>) {
   const def = nodes.get(data.shaderType);
 
   if (!def) {

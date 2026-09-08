@@ -491,6 +491,170 @@ describe('groups', () => {
   });
 });
 
+describe('subgraphs', () => {
+  /** uv --uv--> noise --value--> output.albedo, so extracting just `noise`
+   *  exercises both a crossing-IN and a crossing-OUT edge. */
+  function buildExtractable() {
+    const uv = add('test.uv');
+    const noise = add('test.noise');
+    store().connect({ node: uv, socket: 'uv' }, { node: noise, socket: 'uv' });
+    store().connect({ node: noise, socket: 'value' }, { node: outputId(), socket: 'albedo' });
+    return { uv, noise };
+  }
+
+  it('extracts a selection + internal edges into a new SubGraph and replaces it with one instance', () => {
+    const { uv, noise } = buildExtractable();
+
+    const instanceId = store().extractSubGraph([noise], 'Wobble');
+
+    expect(instanceId).not.toBeNull();
+    const doc = store().doc;
+    expect(doc.subGraphs).toHaveLength(1);
+    const subGraph = doc.subGraphs[0];
+    expect(subGraph.name).toBe('Wobble');
+    expect(subGraph.graph.nodes.map((n) => n.id)).toEqual([noise]);
+    expect(subGraph.inputs).toEqual([{ id: `${noise}:uv`, label: 'Uv', type: 'vec2', direction: 'in' }]);
+    expect(subGraph.outputs).toEqual([{ id: `${noise}:value`, label: 'Value', type: 'vec3', direction: 'out' }]);
+
+    const instance = graph().nodes.find((n) => n.id === instanceId);
+    expect(instance?.type).toBe('subgraph.instance');
+    expect(instance?.subGraphId).toBe(subGraph.id);
+    expect(graph().nodes.map((n) => n.id)).not.toContain(noise);
+    expect(store().selectedNodeIds).toEqual([instanceId]);
+
+    expect(graph().edges).toContainEqual(
+      expect.objectContaining({
+        source: { node: uv, socket: 'uv' },
+        target: { node: instanceId, socket: `${noise}:uv` },
+      }),
+    );
+    expect(graph().edges).toContainEqual(
+      expect.objectContaining({
+        source: { node: instanceId, socket: `${noise}:value` },
+        target: { node: outputId(), socket: 'albedo' },
+      }),
+    );
+  });
+
+  it('refuses to extract the graph output node', () => {
+    buildExtractable();
+
+    const result = store().extractSubGraph([outputId()]);
+
+    expect(result).toBeNull();
+    expect(store().lastError).toMatch(/output node/);
+  });
+
+  it('instantiates a second instance of an existing SubGraph', () => {
+    const { noise } = buildExtractable();
+    const first = store().extractSubGraph([noise]) as string;
+    const subGraphId = graph().nodes.find((n) => n.id === first)!.subGraphId as string;
+
+    const second = store().instantiateSubGraph(subGraphId, { x: 10, y: 20 });
+
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    const node = graph().nodes.find((n) => n.id === second);
+    expect(node?.type).toBe('subgraph.instance');
+    expect(node?.subGraphId).toBe(subGraphId);
+    expect(node?.position).toEqual({ x: 10, y: 20 });
+  });
+
+  it('dives into a subgraph via enterSubGraphEditing, routes mutations to it, and returns via exitSubGraphEditing', () => {
+    const { noise } = buildExtractable();
+    const instanceId = store().extractSubGraph([noise]) as string;
+    const subGraphId = graph().nodes.find((n) => n.id === instanceId)!.subGraphId as string;
+    const parentGraphBefore = graph();
+
+    store().enterSubGraphEditing(subGraphId);
+
+    expect(store().editingTarget).toEqual({ kind: 'subgraph', subGraphId });
+    expect(activeGraph(store().doc)).toBe(store().doc.subGraphs.find((sg) => sg.id === subGraphId)?.graph);
+
+    const added = add('test.uv');
+    expect(store().doc.subGraphs.find((sg) => sg.id === subGraphId)?.graph.nodes.map((n) => n.id)).toContain(added);
+    // The parent layer's graph is untouched (same reference) — `added` only
+    // ever landed in the subgraph's own graph.
+    expect(activeLayer(store().doc).graph).toBe(parentGraphBefore);
+
+    store().exitSubGraphEditing();
+
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+    expect(store().selectedNodeIds).toEqual([]);
+  });
+
+  it('refuses to enter or instantiate an unknown subgraph id', () => {
+    store().enterSubGraphEditing('ghost');
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+    expect(store().lastError).toMatch(/No subgraph/);
+
+    expect(store().instantiateSubGraph('ghost', { x: 0, y: 0 })).toBeNull();
+  });
+
+  it('adds and removes exposed inputs/outputs on the interface', () => {
+    const { noise } = buildExtractable();
+    const instanceId = store().extractSubGraph([noise]) as string;
+    const subGraphId = graph().nodes.find((n) => n.id === instanceId)!.subGraphId as string;
+
+    const inputId = store().addSubGraphInput(subGraphId, 'Extra In', 'float');
+    const newOutputId = store().addSubGraphOutput(subGraphId, 'Extra Out', 'bool');
+
+    expect(inputId).not.toBeNull();
+    expect(newOutputId).not.toBeNull();
+    let subGraph = store().doc.subGraphs.find((sg) => sg.id === subGraphId)!;
+    expect(subGraph.inputs.map((s) => s.id)).toContain(inputId);
+    expect(subGraph.outputs.map((s) => s.id)).toContain(newOutputId);
+
+    store().removeSubGraphInput(subGraphId, inputId as string);
+    store().removeSubGraphOutput(subGraphId, newOutputId as string);
+
+    subGraph = store().doc.subGraphs.find((sg) => sg.id === subGraphId)!;
+    expect(subGraph.inputs.map((s) => s.id)).not.toContain(inputId);
+    expect(subGraph.outputs.map((s) => s.id)).not.toContain(newOutputId);
+  });
+
+  it('renames a subgraph, visible on the instance card via the live SubGraph reference', () => {
+    const { noise } = buildExtractable();
+    const instanceId = store().extractSubGraph([noise], 'Original') as string;
+    const subGraphId = graph().nodes.find((n) => n.id === instanceId)!.subGraphId as string;
+
+    store().renameSubGraph(subGraphId, 'Renamed');
+
+    expect(store().doc.subGraphs.find((sg) => sg.id === subGraphId)?.name).toBe('Renamed');
+  });
+
+  it('validates connections into/out of a subgraph instance via the SubGraph interface, not the registry', () => {
+    const { noise } = buildExtractable();
+    const instanceId = store().extractSubGraph([noise]) as string;
+
+    // Exposed output ("value", vec3) → color input: legal.
+    const toEmissive = store().connect(
+      { node: instanceId, socket: `${noise}:value` },
+      { node: outputId(), socket: 'emissive' },
+    );
+    expect(toEmissive.ok).toBe(true);
+
+    // Same exposed output (vec3) → float input: illegal — proves the OUT
+    // lookup resolved a real type instead of failing open.
+    const toRoughness = store().connect(
+      { node: instanceId, socket: `${noise}:value` },
+      { node: outputId(), socket: 'roughness' },
+    );
+    expect(toRoughness).toMatchObject({ ok: false, reason: 'type-mismatch' });
+
+    // The exposed input ("uv", vec2) is already fed by `uv` from extraction —
+    // a second source into it is rejected as OCCUPIED, which only happens if
+    // the IN lookup resolved a real socket (an unresolved one instead rejects
+    // with `unknown-target-socket`).
+    const uv2 = add('test.uv');
+    const intoOccupied = store().connect(
+      { node: uv2, socket: 'uv' },
+      { node: instanceId, socket: `${noise}:uv` },
+    );
+    expect(intoOccupied).toMatchObject({ ok: false, reason: 'target-occupied' });
+  });
+});
+
 describe('document lifecycle', () => {
   it('bumps meta.updated on every mutation', async () => {
     const { created, updated: before } = store().doc.meta;

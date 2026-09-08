@@ -124,11 +124,22 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 .sg-node__body { padding: 8px; color: var(--sg-dim); }
 
 /* Category accent on the title bar — the same hue family as the palette. */
-.sg-node--input  .sg-node__head { border-left-color: #7cd3ff; }
-.sg-node--math   .sg-node__head { border-left-color: #a3adbb; }
-.sg-node--noise  .sg-node__head { border-left-color: #a5e34a; }
-.sg-node--color  .sg-node__head { border-left-color: #ffd866; }
-.sg-node--output .sg-node__head { border-left-color: #ff8fa3; }
+.sg-node--input    .sg-node__head { border-left-color: #7cd3ff; }
+.sg-node--math     .sg-node__head { border-left-color: #a3adbb; }
+.sg-node--noise    .sg-node__head { border-left-color: #a5e34a; }
+.sg-node--color    .sg-node__head { border-left-color: #ffd866; }
+.sg-node--output   .sg-node__head { border-left-color: #ff8fa3; }
+.sg-node--subgraph .sg-node__head { border-left-color: #c792ea; }
+
+/* Subgraph-instance dive-in affordance, in the same footer slot the (mutually
+ * exclusive) "graph output" pin uses. `nodrag` (see `GroupFrameNode.tsx`'s
+ * header controls) keeps a click from also starting a canvas node-drag. */
+.sg-node__dive-in {
+  display: block; width: 100%; padding: 3px 8px; font-size: 10px;
+  letter-spacing: 0.04em; text-align: center; background: transparent;
+  border: none; color: inherit; cursor: pointer;
+}
+.sg-node__dive-in:hover { color: var(--sg-accent); }
 
 /* Live per-node thumbnail: the ONE shared preview renderer's output, blitted
  * onto this card's own <canvas> (see ShaderNodeCard.tsx / preview/thumbnails.ts). */

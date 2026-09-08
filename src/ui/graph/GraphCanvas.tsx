@@ -105,23 +105,30 @@ function GraphCanvasInner() {
   const setGroupBounds = useEditorStore((s) => s.setGroupBounds);
   const removeGroup = useEditorStore((s) => s.removeGroup);
   const setNodeGroup = useEditorStore((s) => s.setNodeGroup);
+  const extractSubGraph = useEditorStore((s) => s.extractSubGraph);
+  const enterSubGraphEditing = useEditorStore((s) => s.enterSubGraphEditing);
+  const exitSubGraphEditing = useEditorStore((s) => s.exitSubGraphEditing);
 
   const graph = activeGraph(doc, editingTarget);
   const layerId = activeLayerId(doc);
   const viewingMask = activeGraphKind(doc, editingTarget) === 'mask';
   const layer = activeLayer(doc);
+  const activeSubGraph =
+    editingTarget.kind === 'subgraph' ? doc.subGraphs.find((sg) => sg.id === editingTarget.subGraphId) : undefined;
   const lookup = useMemo(() => registrySocketLookup(graph, doc.subGraphs), [graph, doc.subGraphs]);
 
   // Edge and group/frame selection are editor-only: the document has no place
   // for either. Reset on any switch of WHICH graph is showing — a new active
-  // layer, or diving into / out of that layer's mask (same layerId, different
-  // graph).
+  // layer, or diving into / out of that layer's mask or a subgraph (same
+  // layerId, different graph either way). `editingTarget` is a fresh object
+  // on every such switch (see `store.ts`), so it alone is a sufficient dep;
+  // `layerId` stays for belt-and-suspenders clarity.
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   useEffect(() => {
     setSelectedEdgeIds([]);
     setSelectedGroupIds([]);
-  }, [layerId, viewingMask]);
+  }, [layerId, editingTarget]);
 
   const [palette, setPalette] = useState<PalettePosition | null>(null);
   const { screenToFlowPosition, getInternalNode } = useReactFlow();
@@ -372,6 +379,32 @@ function GraphCanvasInner() {
     if (groupId) setSelectedGroupIds([groupId]);
   }, [createGroup, getInternalNode]);
 
+  // ── Subgraphs ────────────────────────────────────────────────────────────
+
+  /** Toolbar action: move the current selection (+ its internal edges) into a
+   *  new `SubGraph`, replacing it with one instance node — see
+   *  `store.extractSubGraph`. Disabled when nothing (or the output node) is
+   *  selected, same spirit as the Group button above. */
+  const extractSelectedToSubGraph = useCallback(() => {
+    const ids = useEditorStore.getState().selectedNodeIds;
+    if (ids.length === 0) return;
+    extractSubGraph(ids);
+  }, [extractSubGraph]);
+
+  /** Double-clicking a subgraph-instance node dives in to edit its internals
+   *  — the same affordance as the "Edit subgraph →" button on the card
+   *  itself (`ShaderNodeCard.tsx`), for parity with Houdini/Unreal-style
+   *  dive-in gestures. Every OTHER node type ignores this (`onDoubleClick`
+   *  above already owns plain-canvas double-clicks for the add-node palette). */
+  const onNodeDoubleClick = useCallback(
+    (_event: ReactMouseEvent, node: ShaderFlowNode | GroupFlowNode) => {
+      if (node.type === SHADER_NODE_TYPE && node.data.subGraphId !== undefined) {
+        enterSubGraphEditing(node.data.subGraphId);
+      }
+    },
+    [enterSubGraphEditing],
+  );
+
   // The output node is not deletable, so React Flow never proposes removing it
   // and never cascade-deletes its edges. Say why instead of failing silently.
   // Also handles Cmd/Ctrl+G to group the selection, mirroring the toolbar
@@ -408,6 +441,7 @@ function GraphCanvasInner() {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
+        onNodeDoubleClick={onNodeDoubleClick}
         isValidConnection={isValidConnection}
         onPaneContextMenu={onPaneContextMenu}
         deleteKeyCode={['Delete', 'Backspace']}
@@ -443,6 +477,15 @@ function GraphCanvasInner() {
           >
             Group
           </button>
+          <button
+            type="button"
+            className="sg-btn"
+            onClick={extractSelectedToSubGraph}
+            disabled={selectedNodeIds.length === 0 || selectedNodeIds.includes(graph.outputNodeId)}
+            title="Move the selected nodes into a new reusable subgraph"
+          >
+            Extract to Subgraph
+          </button>
           <span className="sg-graph__meta">
             {graph.nodes.length} nodes · {graph.edges.length} links
           </span>
@@ -452,7 +495,15 @@ function GraphCanvasInner() {
         </Panel>
         {viewingMask ? (
           <Panel position="top-center">
-            <GraphBreadcrumb layerName={layer.name} onExit={exitMaskEditing} />
+            <GraphBreadcrumb parentLabel={layer.name} currentLabel="Mask" onExit={exitMaskEditing} />
+          </Panel>
+        ) : activeSubGraph ? (
+          <Panel position="top-center">
+            <GraphBreadcrumb
+              parentLabel={layer.name}
+              currentLabel={`Subgraph: ${activeSubGraph.name}`}
+              onExit={exitSubGraphEditing}
+            />
           </Panel>
         ) : null}
       </ReactFlow>

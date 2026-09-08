@@ -51,6 +51,12 @@ export interface ShaderCardData extends Record<string, unknown> {
   /** The graph's result node: it is never deletable. */
   isOutput: boolean;
   bypassed: boolean;
+  /** Set only for a subgraph-instance node (`shaderType ===
+   *  SUBGRAPH_INSTANCE_NODE_TYPE`, see `src/model/subgraph.ts`) — the
+   *  `SubGraph.id` it instances. `ShaderNodeCard` reads sockets from that
+   *  `SubGraph` live rather than the registry; this field is the only extra
+   *  data it needs beyond what every other node card already gets. */
+  subGraphId?: string;
 }
 
 export type ShaderFlowNode = RFNode<ShaderCardData, typeof SHADER_NODE_TYPE>;
@@ -107,6 +113,7 @@ export function toFlowNodes(graph: ShaderGraph, selectedNodeIds: Iterable<string
         title: node.title,
         isOutput,
         bypassed: node.bypassed ?? false,
+        subGraphId: node.subGraphId,
       },
     };
   });
