@@ -1,0 +1,117 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — performance budget panel styles
+   Owned by PerfRoot.tsx/PerfPanel.tsx and imported from them.
+   References the shared tokens from `app.css` (--sg-*), never raw hex, same
+   discipline as `settings.css`/`toolbar.css`/`layers.css`.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-perf__toggle {
+  position: fixed;
+  /* Settings' own toggle sits at top:8px/right:12px (28px square) — offset
+     far enough right that the two never overlap regardless of font metrics. */
+  top: 8px;
+  right: 48px;
+  z-index: 40;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--sg-radius);
+  border: 1px solid var(--sg-line);
+  background: var(--sg-panel);
+  color: var(--sg-text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.sg-perf__toggle:hover { border-color: var(--sg-accent); }
+
+.sg-perf__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.sg-perf__dialog {
+  position: relative;
+  width: 360px;
+  max-width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+  background: var(--sg-panel);
+  border-left: 1px solid var(--sg-line);
+}
+
+.sg-perf__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--sg-radius);
+  border: 1px solid var(--sg-line);
+  background: var(--sg-raised);
+  color: var(--sg-text);
+  cursor: pointer;
+}
+
+.sg-perf__title { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+
+.sg-perf__hint { font-size: 11px; color: var(--sg-dim); }
+
+.sg-perf__config {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0 0 12px;
+  font-size: 11px;
+}
+.sg-perf__config dt { color: var(--sg-dim); }
+.sg-perf__config dd { margin: 0; color: var(--sg-text); }
+
+.sg-perf__canvas {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin: 0 0 12px;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius);
+  background: #000;
+}
+
+.sg-perf__run {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--sg-radius);
+  border: 1px solid var(--sg-line);
+  background: var(--sg-raised);
+  color: var(--sg-text);
+  cursor: pointer;
+  font: inherit;
+}
+.sg-perf__run:hover:not(:disabled) { border-color: var(--sg-accent); }
+.sg-perf__run:disabled { opacity: 0.5; cursor: default; }
+
+.sg-perf__error { margin-top: 8px; font-size: 11px; color: var(--sg-danger); }
+
+.sg-perf__report { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--sg-line); }
+
+.sg-perf__verdict { margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+.sg-perf__verdict--pass { color: var(--sg-ok); }
+.sg-perf__verdict--fail { color: var(--sg-danger); }
+
+.sg-perf__stats {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0 0 10px;
+  font-size: 11px;
+}
+.sg-perf__stats dt { color: var(--sg-dim); }
+.sg-perf__stats dd { margin: 0; color: var(--sg-text); }
+
+.sg-perf__samples { font-size: 11px; color: var(--sg-dim); }
+.sg-perf__samples summary { cursor: pointer; color: var(--sg-text); }
+.sg-perf__samples ul { max-height: 160px; overflow: auto; margin: 6px 0 0; padding-left: 16px; }
