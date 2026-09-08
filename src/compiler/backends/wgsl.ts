@@ -324,7 +324,7 @@ function compileGraph(
     ? { ...graph, outputNodeId: opts.previewNodeId }
     : graph;
 
-  const result = lowerGraph(effectiveGraph, registry, HOOKS, handle.sink);
+  const result = lowerGraph(effectiveGraph, registry, HOOKS, handle.sink, opts?.subGraphs ?? []);
 
   if (opts?.previewNodeId) {
     if (result.outputExpr !== undefined) {
@@ -395,7 +395,7 @@ function compileDocument(
         ],
       };
     }
-    return compileGraph(owner.graph, opts, registry);
+    return compileGraph(owner.graph, { ...opts, subGraphs: doc.subGraphs }, registry);
   }
 
   if (opts?.previewLayerId) {
@@ -414,7 +414,7 @@ function compileDocument(
       };
     }
     const { previewLayerId: _drop, ...rest } = opts;
-    return compileGraph(layer.graph, rest, registry);
+    return compileGraph(layer.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
   }
 
   const soloed = doc.layerStack.layers.filter((l) => l.soloed);
@@ -426,7 +426,7 @@ function compileDocument(
 
   for (const layer of participating) {
     const bodyOffset = handle.body.length;
-    const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink);
+    const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink, doc.subGraphs);
     for (const entry of result.sourceMap) {
       relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
     }
