@@ -4,41 +4,59 @@ Binds ShadeGraph to the Legion game repo (`~/Projects/Legion`, `snds/legion`).
 Legion is the first real consumer; this adapter proves the tool against a
 shipping, uniform-driven, layered planet renderer.
 
-## What Legion already exposes (the seam we hook into)
+Phase 5 reframed the whole approach: recognition is a **general, configurable
+strategy** (`src/storage/recognition/`), and any one source tree — Legion
+included — is a **configuration passed to it, never code baked into the
+tool** (see `src/storage/recognition/recognize.ts`'s header). This directory
+holds Legion's half of that config, and nothing else.
 
-- **Composable GLSL chunks** — `GLSL_SIMPLEX`, `GLSL_FBM`, `GLSL_PLATES`,
-  `GLSL_TERRAIN`, `GLSL_RAMP`, `GLSL_CLOUDS` (`src/render/planet/glsl.ts`),
-  concatenated in `src/render/planet/shaders.ts`. These map 1:1 to ShadeGraph
-  **`legion.chunk.*` nodes**.
-- **Uniform-driven materials** — `uDisplacement`, `uNormalStrength`,
-  `uCloudShadow`, `uOceanShallow/Deep`, … → ShadeGraph **exposed params** with
-  `bindUniform`.
-- **Per-archetype lab-store** (`src/render/planet/lab-store.ts`, localStorage
-  v4; rocky / continuum / star / blackhole / nebula) with Save/Revert → maps to
-  ShadeGraph **documents per archetype** + **blackboard export**.
-- **Conceptual layers** — surface globe, atmosphere, clouds, rings, giant
-  bands, distant impostor → ShadeGraph **layer stack**.
+## What Legion actually looks like (confirmed against real source)
 
-## Adapter surface (to build — Phase 4)
+Legion bundles shader source as `export const GLSL_<NAME> = /* glsl */ \`...\``
+string constants across two real files:
 
-1. `importGlslChunks()` — read Legion's `glsl.ts` chunk exports and register a
-   `legion.chunk.<NAME>` node definition for each (inputs/uniforms parsed from
-   the chunk signature).
-2. `importArchetype(type)` — build a `ShaderDocument` from an archetype's
-   current shader + lab-store dials, so the existing look loads as a graph.
-3. `exportBlackboard(doc)` — emit a lab-store-compatible dial set (the existing
-   Save/Revert path keeps working; ShadeGraph just authors it).
-4. `exportProgram(doc, 'glsl-es')` — regenerate `shaders.ts`-shaped source, or
-   feed uniforms live via a dev bridge (see below).
+- `src/render/planet/glsl.ts` — `GLSL_SIMPLEX`, `GLSL_FBM`, `GLSL_CLOUDS`,
+  `GLSL_PLATES`, `GLSL_TERRAIN`, `GLSL_RAMP` (6 chunks).
+- `src/render/star/kelvin.ts` — `GLSL_KELVIN` (1 chunk).
 
-## Live bridge (optional, dev only)
+7 chunks total. Two real ordering dependencies, declared in doc-comment prose
+next to the export (never parsed out of that prose — see below): `GLSL_CLOUDS`
+and `GLSL_TERRAIN` each require `GLSL_FBM` and `GLSL_PLATES` to be included
+before them.
 
-A tiny websocket/postMessage channel so editing in ShadeGraph updates a running
-Legion dev server in real time (mirrors the `__continuumAccept` hooks already in
-Legion). Off by default; ShadeGraph is fully usable standalone.
+## What's actually built (Phase 5)
+
+- **`recognitionConfig.ts`** — `legionRecognitionConfig`, a plain
+  `RecognitionConfig` value (`bundledExtensions`, `exportNamePattern`, the 2
+  `requires` entries above) matching Legion's real bundling convention. Pure
+  data; imports only the `RecognitionConfig` *type* from
+  `src/storage/recognition`. A caller (app code, a script) supplies this
+  config to the generic `recognizeShaderObjects` — this file never runs
+  recognition itself.
+- **`recognitionConfig.test.ts`** — proves the config against literal
+  fixture text copied verbatim from Legion's real chunks (real
+  `/* glsl */`-tagged bundling syntax, real uniform lines, the real
+  "Requires ..." doc-comment wording) — never a live read of
+  `~/Projects/Legion` at build or runtime.
+- **`src/storage/recognition/recognize.ts`** (generic, not Legion-specific) —
+  scans already-read file text for standalone shader files and bundled
+  `export const GLSL_*` chunks per whatever `RecognitionConfig` it's given,
+  extracting `uniform <type> <name>;` declarations and surfacing each
+  object's config-declared `requires`.
+- **`chunk.raw`** (`src/nodes/definitions/chunk.ts`) — the one generic node
+  type every recognized object becomes when a user selectively graphs it
+  (`graphFromRecognizedObject`, `src/storage/recognition/graphFromRecognizedObject.ts`).
+  No per-source node types — Legion's chunks and any other source's chunks
+  land as the same `chunk.raw` shape, text passed through verbatim via
+  `EmitContext.prelude`.
+- **`ProjectManifest`** (`src/model/projectManifest.ts`, UI in
+  `src/ui/manifest/`) — tracks connected folders and per-object discovery
+  state (draft/saved) across a project; the shareable, committable artifact
+  that discovery and selective graphing write into.
 
 ## Boundary
 
 ShadeGraph never imports Legion as a dependency and never writes to the Legion
 repo without an explicit export action. Legion consumes ShadeGraph output; the
-tool stays generic.
+tool stays generic. `legionRecognitionConfig`'s shape is hand-confirmed
+against Legion's source at the time it was written, not fetched live.
