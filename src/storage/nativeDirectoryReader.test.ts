@@ -10,6 +10,7 @@ import { createNativeDirectoryReader } from './nativeDirectoryReader';
 interface FakeFile {
   kind: 'file';
   name: string;
+  text?: string;
 }
 interface FakeDir {
   kind: 'directory';
@@ -20,8 +21,8 @@ interface FakeDir {
 function dir(name: string, children: Array<FakeDir | FakeFile> = []): FakeDir {
   return { kind: 'directory', name, children: new Map(children.map((c) => [c.name, c])) };
 }
-function file(name: string): FakeFile {
-  return { kind: 'file', name };
+function file(name: string, text?: string): FakeFile {
+  return { kind: 'file', name, text };
 }
 
 function toHandle(entry: FakeDir | FakeFile): FileSystemDirectoryHandle | FileSystemFileHandle {
@@ -30,7 +31,12 @@ function toHandle(entry: FakeDir | FakeFile): FileSystemDirectoryHandle | FileSy
       kind: 'file',
       name: entry.name,
       async getFile() {
-        return { name: entry.name } as unknown as File;
+        return {
+          name: entry.name,
+          async text() {
+            return entry.text ?? '';
+          },
+        } as unknown as File;
       },
     } as unknown as FileSystemFileHandle;
   }
@@ -55,7 +61,7 @@ function toHandle(entry: FakeDir | FakeFile): FileSystemDirectoryHandle | FileSy
 }
 
 const root = dir('root', [
-  dir('planets', [file('mars.png'), file('notes.txt')]),
+  dir('planets', [file('mars.png'), file('notes.txt', 'uniform float uTime;')]),
   file('reel.mp4'),
   file('readme.md'),
 ]);
@@ -91,5 +97,17 @@ describe('createNativeDirectoryReader', () => {
     const reader = createNativeDirectoryReader(toHandle(root) as FileSystemDirectoryHandle);
     const preview = await reader.openPreview(['planets', 'notes.txt']);
     expect(preview).toBeUndefined();
+  });
+
+  it('reads a file\'s full text on demand', async () => {
+    const reader = createNativeDirectoryReader(toHandle(root) as FileSystemDirectoryHandle);
+    const text = await reader.readText(['planets', 'notes.txt']);
+    expect(text).toBe('uniform float uTime;');
+  });
+
+  it('returns undefined reading text for a path that does not resolve', async () => {
+    const reader = createNativeDirectoryReader(toHandle(root) as FileSystemDirectoryHandle);
+    const text = await reader.readText(['planets', 'missing.glsl']);
+    expect(text).toBeUndefined();
   });
 });

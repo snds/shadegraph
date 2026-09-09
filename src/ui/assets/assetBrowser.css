@@ -80,3 +80,8 @@
   background: var(--sg-node-head);
 }
 .sg-assets-row__name { overflow: hidden; text-overflow: ellipsis; }
+.sg-assets-row__recognized {
+  flex: none; font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--sg-accent); border: 1px solid var(--sg-accent); border-radius: 3px;
+  padding: 1px 4px; line-height: 1.4;
+}

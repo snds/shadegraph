@@ -29,6 +29,11 @@ export interface AssetTreeNode {
   preview?: string;
   previewKind?: PreviewKind;
   previewState: PreviewState;
+  /** Shader-object recognition result for this node (files only):
+   *  `undefined` = not checked yet, `true`/`false` = checked, per
+   *  `recognizeShaderObjects` (`src/storage/recognition/recognize.ts`).
+   *  Populated lazily by `assetStore.ts`'s `recognizeNode`, never eagerly. */
+  recognized?: boolean;
 }
 
 export function nodeId(path: string[]): string {
@@ -49,6 +54,7 @@ export function makeNode(path: string[], name: string, kind: AssetEntryKind, par
     preview: undefined,
     previewKind: undefined,
     previewState: 'idle',
+    recognized: undefined,
   };
 }
 

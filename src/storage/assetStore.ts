@@ -23,8 +23,20 @@ import { create } from 'zustand';
 import { createIndexedDbHandleStore } from './indexedDbHandleStore';
 import { createNativeDirectoryReader } from './nativeDirectoryReader';
 import { createPreviewUrlManager, type PreviewUrlManager } from './previewUrls';
+import { defaultRecognitionConfig } from './recognitionConfig';
+import { recognizeShaderObjects, type RecognitionConfig } from './recognition';
 import { flattenVisibleTree, makeNode, nodeId, type AssetTreeNode } from './tree';
 import type { DirectoryReader, HandleStore } from './types';
+
+/** Extension pre-check only — never reads a file's text. Lets `recognizeNode`
+ *  skip straight to `recognized: false` for files no config extension could
+ *  ever match, without opening/reading them at all. */
+function isRecognitionCandidate(fileName: string, config: RecognitionConfig): boolean {
+  const extensions = [...(config.fileExtensions ?? []), ...(config.bundledExtensions ?? [])];
+  if (extensions.length === 0) return false;
+  const lower = fileName.toLowerCase();
+  return extensions.some((ext) => lower.endsWith(ext.toLowerCase()));
+}
 
 export type AssetConnectionStatus =
   | 'disconnected'
@@ -67,6 +79,14 @@ export interface AssetStoreState {
    *  `loadPreview` call once the node scrolls out of the virtualized
    *  viewport — see `useVirtualRows.ts`'s visibility effect. */
   releasePreview: (id: string) => void;
+  /** Runs shader-object recognition (`recognizeShaderObjects`) against one
+   *  file node, on demand — lazily reading its text via the connected
+   *  `DirectoryReader` only if its extension could possibly match
+   *  `deps.recognitionConfig`, then patching `nodesById[id].recognized`.
+   *  A no-op once the node has already been checked (`recognized !==
+   *  undefined`), so it is safe to call repeatedly (e.g. from the same
+   *  visibility effect that drives `loadPreview`). */
+  recognizeNode: (id: string) => Promise<void>;
 }
 
 export interface AssetStoreDeps {
@@ -74,6 +94,10 @@ export interface AssetStoreDeps {
   urlManager: PreviewUrlManager;
   pickDirectory: () => Promise<FileSystemDirectoryHandle>;
   createReader: (root: FileSystemDirectoryHandle) => DirectoryReader;
+  /** Config `recognizeNode` classifies files against. Optional — defaults to
+   *  `{}` (nothing recognized) so existing/test deps that omit it keep
+   *  behaving exactly as before. */
+  recognitionConfig?: RecognitionConfig;
 }
 
 export function createAssetStore(deps: AssetStoreDeps) {
@@ -231,6 +255,31 @@ export function createAssetStore(deps: AssetStoreDeps) {
         deps.urlManager.release(id);
         patchNode(id, { previewState: 'idle', preview: undefined, previewKind: undefined });
       },
+
+      async recognizeNode(id) {
+        const node = get().nodesById[id];
+        if (!node || node.kind !== 'file' || !currentReader) return;
+        if (node.recognized !== undefined) return; // already checked
+
+        const config = deps.recognitionConfig ?? {};
+        if (!isRecognitionCandidate(node.name, config)) {
+          patchNode(id, { recognized: false });
+          return;
+        }
+
+        try {
+          const text = await currentReader.readText(node.path);
+          if (!get().nodesById[id]) return; // node vanished while awaiting
+          if (text === undefined) {
+            patchNode(id, { recognized: false });
+            return;
+          }
+          const objects = recognizeShaderObjects([node], { [id]: text }, config);
+          patchNode(id, { recognized: objects.length > 0 });
+        } catch {
+          patchNode(id, { recognized: false });
+        }
+      },
     };
   });
 }
@@ -244,6 +293,7 @@ export const useAssetStore = createAssetStore({
   urlManager: createPreviewUrlManager(),
   pickDirectory: () => window.showDirectoryPicker({ mode: 'read' }),
   createReader: createNativeDirectoryReader,
+  recognitionConfig: defaultRecognitionConfig,
 });
 
 export { flattenVisibleTree, nodeId };

@@ -45,11 +45,17 @@ const fakeBlob = {} as Blob;
 
 /** A fixture-backed `DirectoryReader`: `fixture` maps a joined path (`''` for
  *  the root) to that folder's entries. Records call counts so tests can
- *  assert lazy (not eager) listing. */
-function fixtureReader(fixture: Record<string, AssetEntry[]>): DirectoryReader & { listCalls: string[][] } {
+ *  assert lazy (not eager) listing. `textFixture` maps a joined path to that
+ *  file's text, for `readText`/recognition tests. */
+function fixtureReader(
+  fixture: Record<string, AssetEntry[]>,
+  textFixture: Record<string, string> = {},
+): DirectoryReader & { listCalls: string[][]; readTextCalls: string[][] } {
   const listCalls: string[][] = [];
+  const readTextCalls: string[][] = [];
   return {
     listCalls,
+    readTextCalls,
     async listEntries(path) {
       listCalls.push(path);
       return fixture[path.join('/')] ?? [];
@@ -58,6 +64,10 @@ function fixtureReader(fixture: Record<string, AssetEntry[]>): DirectoryReader &
       const name = path[path.length - 1];
       if (name === 'a.png') return { kind: 'image', blob: fakeBlob };
       return undefined;
+    },
+    async readText(path) {
+      readTextCalls.push(path);
+      return textFixture[path.join('/')];
     },
   };
 }
@@ -267,6 +277,65 @@ describe('createAssetStore — referential stability', () => {
     const rootIdsBefore = store.getState().rootIds;
     await store.getState().loadPreview('a.png'); // touches nodesById, not rootIds
     expect(store.getState().rootIds).toBe(rootIdsBefore);
+  });
+});
+
+describe('createAssetStore — recognizeNode', () => {
+  const RECOGNITION_FIXTURE: Record<string, AssetEntry[]> = {
+    '': [
+      { name: 'noise.glsl', kind: 'file' },
+      { name: 'notes.txt', kind: 'file' },
+    ],
+  };
+  const RECOGNITION_TEXT: Record<string, string> = {
+    'noise.glsl': 'uniform float uTime;\nvoid main() {}',
+    'notes.txt': 'just some prose',
+  };
+
+  it('marks a matching, recognizable file as recognized, lazily reading its text', async () => {
+    const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    expect(reader.readTextCalls).toEqual([]); // connect()/listing never reads text
+
+    await store.getState().recognizeNode('noise.glsl');
+    expect(reader.readTextCalls).toEqual([['noise.glsl']]);
+    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+  });
+
+  it('skips reading text for a file whose extension cannot match, marking it unrecognized', async () => {
+    const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('notes.txt');
+    expect(reader.readTextCalls).toEqual([]);
+    expect(store.getState().nodesById['notes.txt'].recognized).toBe(false);
+  });
+
+  it('is a no-op once a node has already been checked', async () => {
+    const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('noise.glsl');
+    await store.getState().recognizeNode('noise.glsl');
+    expect(reader.readTextCalls).toEqual([['noise.glsl']]);
+  });
+
+  it('defaults to recognizing nothing when no recognitionConfig is supplied', async () => {
+    const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
+    const deps = makeDeps({ createReader: () => reader });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('noise.glsl');
+    expect(reader.readTextCalls).toEqual([]);
+    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(false);
   });
 });
 

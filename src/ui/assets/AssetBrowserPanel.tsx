@@ -130,6 +130,7 @@ function AssetTreeView() {
   const toggleExpand = useAssetStore((s) => s.toggleExpand);
   const loadPreview = useAssetStore((s) => s.loadPreview);
   const releasePreview = useAssetStore((s) => s.releasePreview);
+  const recognizeNode = useAssetStore((s) => s.recognizeNode);
 
   const flat = useMemo(() => flattenVisibleTree(nodesById, rootIds), [nodesById, rootIds]);
   const { containerRef, range } = useVirtualRows(flat.length, ROW_HEIGHT);
@@ -147,13 +148,19 @@ function AssetTreeView() {
     }
     const prevVisible = visibleFileIdsRef.current;
     for (const id of nextVisible) {
-      if (!prevVisible.has(id)) void loadPreview(id);
+      if (!prevVisible.has(id)) {
+        void loadPreview(id);
+        // Recognition follows the same "dirty + visible only" discipline as
+        // preview loading: a file's text is only ever read once it scrolls
+        // into view, never as part of listing/expanding its parent folder.
+        void recognizeNode(id);
+      }
     }
     for (const id of prevVisible) {
       if (!nextVisible.has(id)) releasePreview(id);
     }
     visibleFileIdsRef.current = nextVisible;
-  }, [flat, range.startIndex, range.endIndex, loadPreview, releasePreview]);
+  }, [flat, range.startIndex, range.endIndex, loadPreview, releasePreview, recognizeNode]);
 
   useEffect(
     () => () => {
@@ -220,6 +227,12 @@ function AssetRow({ node, onToggle }: { node: AssetTreeNode; onToggle: (id: stri
       <span className="sg-assets-row__name" title={node.name}>
         {node.name}
       </span>
+
+      {node.recognized ? (
+        <span className="sg-assets-row__recognized" title="Recognized as a shader object">
+          shader
+        </span>
+      ) : null}
     </div>
   );
 }

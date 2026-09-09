@@ -47,6 +47,11 @@ export interface DirectoryReader {
   /** `undefined` if `path` names a kind with no preview support (i.e. not
    *  image/video) or does not resolve to a file. */
   openPreview(path: string[]): Promise<PreviewSource | undefined>;
+  /** Reads one file's full text content, on demand — used to feed the
+   *  shader-object recognizer (`src/storage/recognition/recognize.ts`) a
+   *  single file's source without ever bulk-reading a connected folder.
+   *  `undefined` if `path` does not resolve to a file. */
+  readText(path: string[]): Promise<string | undefined>;
 }
 
 /** Persists the one connected root's directory handle across sessions.

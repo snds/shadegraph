@@ -50,5 +50,18 @@ export function createNativeDirectoryReader(root: FileSystemDirectoryHandle): Di
       const file = await fileHandle.getFile();
       return { kind, blob: file };
     },
+
+    async readText(path): Promise<string | undefined> {
+      if (path.length === 0) return undefined;
+      const name = path[path.length - 1];
+      try {
+        const dir = await resolveDirectory(root, path.slice(0, -1));
+        const fileHandle = await dir.getFileHandle(name);
+        const file = await fileHandle.getFile();
+        return await file.text();
+      } catch {
+        return undefined;
+      }
+    },
   };
 }
