@@ -34,7 +34,7 @@ export const CHUNK_RAW_NODE_TYPE = 'chunk.raw';
 
 export const chunkRaw: NodeDefinition = {
   type: CHUNK_RAW_NODE_TYPE,
-  category: 'legion',
+  category: 'imported',
   title: 'Imported Chunk (raw)',
   description:
     'A recognized external shader-source object, passed through verbatim. ' +

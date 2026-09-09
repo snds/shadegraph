@@ -21,7 +21,7 @@ const CATEGORY_ORDER: NodeCategory[] = [
   'lighting',
   'texture',
   'util',
-  'legion',
+  'imported',
   'output',
 ];
 

@@ -54,7 +54,7 @@ describe('starter node registration', () => {
     expect(byCategory.noise.map((d) => d.type)).toEqual(['noise.fbm']);
     expect(byCategory.color.map((d) => d.type)).toEqual(['color.ramp']);
     expect(byCategory.output.map((d) => d.type)).toEqual(['output.surface', 'output.mask']);
-    expect(byCategory.legion.map((d) => d.type)).toEqual(['chunk.raw']);
+    expect(byCategory.imported.map((d) => d.type)).toEqual(['chunk.raw']);
   });
 
   it('has no duplicate node types', () => {

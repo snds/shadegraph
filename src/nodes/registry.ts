@@ -8,7 +8,8 @@
 // registered backend that supplies an emitter.
 //
 // Categories seed the palette: input · math · noise · color · sdf · lighting ·
-// texture · util · legion (imported GLSL chunks) · output.
+// texture · util · imported (recognized/imported GLSL chunks, source-agnostic) ·
+// output.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type { Socket, NodeParam, SocketType } from '../model/document';
@@ -23,7 +24,7 @@ export type NodeCategory =
   | 'lighting'
   | 'texture'
   | 'util'
-  | 'legion'
+  | 'imported'
   | 'output';
 
 export interface NodeDefinition {
