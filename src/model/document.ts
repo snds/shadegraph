@@ -127,6 +127,25 @@ export interface ShaderNode {
    *  `SubGraph.inputs`/`outputs`, never copied here, so editing the subgraph's
    *  interface is instantly visible on every instance. */
   subGraphId?: string;
+  /** Set only on a coarse-grained "imported chunk" node (registry type
+   *  `"chunk.raw"`, `src/nodes/definitions/chunk.ts`) produced by
+   *  `graphFromRecognizedObject` (`src/storage/recognition/`): one recognized
+   *  external shader-source object, passed through verbatim rather than
+   *  reconstructed. Phase 5 sketch's "coarse-grained chunk nodes" decision. */
+  chunkSource?: {
+    /** The recognized object's own name (`RecognizedShaderObject.name`) —
+     *  what another chunk's `requires` names to reference this one. */
+    name: string;
+    /** Raw source text, emitted verbatim by backends that support it — never
+     *  reconstructed/reparsed. */
+    text: string;
+    /** Names (`chunkSource.name` values) of other chunks this one declares it
+     *  must come after (`RecognizedShaderObject.requires`), checked against
+     *  the rest of THIS graph at compile time (`src/compiler/lower.ts`) —
+     *  resolved relative to whichever chunk nodes happen to exist here, not
+     *  the wider discovered-object set tracked by the project manifest. */
+    requires: string[];
+  };
 }
 
 export interface Edge {

@@ -8,6 +8,7 @@ import {
   emptyManifest,
   parseManifest,
   serializeManifest,
+  setDiscoveredObjectDraft,
   validateManifest,
   type DiscoveredObject,
   type ProjectManifest,
@@ -198,5 +199,68 @@ describe('parseManifest validation', () => {
 
     expect(validateManifest(JSON.parse(serializeManifest(manifest)))).toEqual(manifest);
     expect(manifest.schemaVersion).toBe(MANIFEST_SCHEMA_VERSION);
+  });
+});
+
+describe('setDiscoveredObjectDraft', () => {
+  it('promotes a "discovered" entry to "draft", embedding the given document', () => {
+    const manifest = emptyManifest();
+    manifest.discoveredObjects = [discoveredInEachState()[0]]; // status: 'discovered'
+    const draft = emptyDocument('Terrain draft');
+
+    const next = setDiscoveredObjectDraft(manifest, 'obj-metadata-only', draft);
+
+    expect(next.discoveredObjects[0].state).toEqual({ status: 'draft', draft });
+    // Metadata/name/path/folderId carry over untouched.
+    expect(next.discoveredObjects[0].metadata).toEqual(manifest.discoveredObjects[0].metadata);
+    expect(next.discoveredObjects[0].name).toBe('GLSL_TERRAIN');
+  });
+
+  it('overwrites an existing draft rather than merging it', () => {
+    const manifest = emptyManifest();
+    manifest.discoveredObjects = [discoveredInEachState()[1]]; // already status: 'draft'
+    const replacement = emptyDocument('Replacement draft');
+
+    const next = setDiscoveredObjectDraft(manifest, 'obj-draft', replacement);
+
+    expect(next.discoveredObjects[0].state).toEqual({ status: 'draft', draft: replacement });
+  });
+
+  it('is pure: never mutates the manifest passed in', () => {
+    const manifest = emptyManifest();
+    manifest.discoveredObjects = [discoveredInEachState()[0]];
+    const snapshot = JSON.parse(JSON.stringify(manifest));
+
+    setDiscoveredObjectDraft(manifest, 'obj-metadata-only', emptyDocument());
+
+    expect(manifest).toEqual(snapshot);
+  });
+
+  it('refreshes meta.updated', () => {
+    const manifest = emptyManifest();
+    manifest.discoveredObjects = [discoveredInEachState()[0]];
+    manifest.meta.updated = new Date(0).toISOString();
+
+    const next = setDiscoveredObjectDraft(manifest, 'obj-metadata-only', emptyDocument());
+
+    expect(next.meta.updated).not.toBe(manifest.meta.updated);
+  });
+
+  it('is a no-op (returns the manifest unchanged) for an unknown object id', () => {
+    const manifest = emptyManifest();
+    manifest.discoveredObjects = [discoveredInEachState()[0]];
+
+    const next = setDiscoveredObjectDraft(manifest, 'does-not-exist', emptyDocument());
+
+    expect(next).toBe(manifest);
+  });
+
+  it('round-trips through serializeManifest/parseManifest after promotion', () => {
+    const manifest = emptyManifest();
+    manifest.discoveredObjects = [discoveredInEachState()[0]];
+
+    const next = setDiscoveredObjectDraft(manifest, 'obj-metadata-only', emptyDocument('Round trip'));
+
+    expect(parseManifest(serializeManifest(next))).toEqual(next);
   });
 });

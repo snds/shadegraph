@@ -23,14 +23,15 @@ const EXPECTED_TYPES = [
   'color.ramp',
   'output.surface',
   'output.mask',
+  'chunk.raw',
 ];
 
 const fresh = () => registerStarterNodes(new NodeRegistry());
 
 describe('starter node registration', () => {
-  it('registers all 9 starter definitions', () => {
+  it('registers all 10 starter definitions', () => {
     const registry = fresh();
-    expect(registry.all()).toHaveLength(9);
+    expect(registry.all()).toHaveLength(10);
     expect(registry.all().map((d) => d.type).sort()).toEqual([...EXPECTED_TYPES].sort());
   });
 
@@ -43,7 +44,7 @@ describe('starter node registration', () => {
   it('is idempotent — re-registering does not throw or duplicate', () => {
     const registry = fresh();
     expect(() => registerStarterNodes(registry)).not.toThrow();
-    expect(registry.all()).toHaveLength(9);
+    expect(registry.all()).toHaveLength(10);
   });
 
   it('groups definitions by category', () => {
@@ -53,6 +54,7 @@ describe('starter node registration', () => {
     expect(byCategory.noise.map((d) => d.type)).toEqual(['noise.fbm']);
     expect(byCategory.color.map((d) => d.type)).toEqual(['color.ramp']);
     expect(byCategory.output.map((d) => d.type)).toEqual(['output.surface', 'output.mask']);
+    expect(byCategory.legion.map((d) => d.type)).toEqual(['chunk.raw']);
   });
 
   it('has no duplicate node types', () => {
@@ -122,9 +124,13 @@ describe('definition invariants', () => {
     },
   );
 
-  it('only the output nodes are terminal (no output sockets)', () => {
+  it('only the output nodes and chunk.raw are terminal (no output sockets)', () => {
+    // `chunk.raw` is terminal too, for a different reason than the output
+    // nodes: it is a coarse passthrough of a bundled multi-function utility
+    // library, not a single expression a socket could carry — see
+    // `src/nodes/definitions/chunk.ts`'s header comment.
     const terminal = starterDefinitions.filter((d) => d.outputs.length === 0);
-    expect(terminal.map((d) => d.type)).toEqual(['output.surface', 'output.mask']);
+    expect(terminal.map((d) => d.type)).toEqual(['output.surface', 'output.mask', 'chunk.raw']);
   });
 });
 

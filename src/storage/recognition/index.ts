@@ -8,3 +8,8 @@
 
 export { recognizeShaderObjects } from './recognize';
 export type { RecognitionConfig, RecognizedShaderObject, RequiresMap } from './types';
+export { graphFromRecognizedObject } from './graphFromRecognizedObject';
+export type {
+  GraphFromRecognizedObjectOptions,
+  GraphFromRecognizedObjectResult,
+} from './graphFromRecognizedObject';

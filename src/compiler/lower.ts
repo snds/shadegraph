@@ -550,6 +550,51 @@ function dispatchGraph(
   return { outputCache, outputSocketCache, topo };
 }
 
+/** Backend-neutral compile-time check for `ShaderNode.chunkSource.requires`
+ *  (Phase 5 selective graphing, `src/model/document.ts`): a `NodeEmitter` only
+ *  ever sees its own node, so it has no way to tell whether a chunk it
+ *  declares it requires is present elsewhere in the same graph, let alone
+ *  ordered before it — this pass has the whole graph in scope and runs once
+ *  per `lowerGraph` call to catch both. Diagnostics only (`warning`, not
+ *  `error`): the raw-passthrough emitter still emits regardless, since an
+ *  incomplete/misordered chunk set is a target-language compile failure the
+ *  target's own compiler will report more precisely than a guess made here —
+ *  this pass exists to make the CAUSE visible up front, not to block or
+ *  auto-fix it (see `graphFromRecognizedObject`'s own, earlier and stricter,
+ *  gate on ungraphed requires for the tradeoff notes on why that one blocks
+ *  instead of warning). */
+export function checkChunkRequires(graph: ShaderGraph, order: string[], sink: EmitSink): void {
+  const nodeIdByChunkName = new Map<string, string>();
+  for (const node of graph.nodes) {
+    if (node.chunkSource) nodeIdByChunkName.set(node.chunkSource.name, node.id);
+  }
+  const positionInOrder = new Map(order.map((id, i) => [id, i]));
+
+  for (const node of graph.nodes) {
+    if (!node.chunkSource) continue;
+    for (const requiredName of node.chunkSource.requires) {
+      const requiredNodeId = nodeIdByChunkName.get(requiredName);
+      if (requiredNodeId === undefined) {
+        sink.diag({
+          level: 'warning',
+          message: `Chunk "${node.chunkSource.name}" requires chunk "${requiredName}", which is not present in this graph.`,
+          nodeId: node.id,
+        });
+        continue;
+      }
+      const requiredPos = positionInOrder.get(requiredNodeId);
+      const ownPos = positionInOrder.get(node.id);
+      if (requiredPos !== undefined && ownPos !== undefined && requiredPos > ownPos) {
+        sink.diag({
+          level: 'warning',
+          message: `Chunk "${node.chunkSource.name}" requires chunk "${requiredName}" to come before it, but it is emitted after.`,
+          nodeId: node.id,
+        });
+      }
+    }
+  }
+}
+
 /** Lowers one graph: resolves order, then dispatches each live node's
  *  `NodeDefinition.emit[hooks.target]` through an `EmitContext` backed by
  *  `sink`. Bypassed nodes skip their emitter entirely and pass their primary
@@ -578,6 +623,7 @@ export function lowerGraph(
     expanding: [],
   };
   const { outputCache, topo } = dispatchGraph(graph, undefined, state);
+  checkChunkRequires(graph, topo.order, sink);
 
   return {
     outputExpr: outputCache.get(graph.outputNodeId),

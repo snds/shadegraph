@@ -6,7 +6,7 @@ import type { SocketTypeLookup } from '../model/connect';
 import { SUBGRAPH_INSTANCE_NODE_TYPE, extractSubGraph } from '../model/subgraph';
 import { registerStarterNodes } from '../nodes/definitions';
 import { NodeRegistry } from '../nodes/registry';
-import { createEmitSink, lowerGraph, resolveOrder } from './lower';
+import { checkChunkRequires, createEmitSink, lowerGraph, resolveOrder } from './lower';
 import { coerceGlsl, glslLiteral } from './backends/glsl-es';
 
 // Pure-topology fixtures. No node registry needed for `resolveOrder`.
@@ -372,5 +372,100 @@ describe('lowerGraph subgraph recursive cycle detection', () => {
     // The reported chain names both subgraphs involved in the transitive cycle.
     expect(cycleDiags[0].message).toContain('sgA');
     expect(cycleDiags[0].message).toContain('sgB');
+  });
+});
+
+describe('checkChunkRequires', () => {
+  // `chunk.raw` nodes have no sockets (see `src/nodes/definitions/chunk.ts`),
+  // so they can never actually appear in `resolveOrder`'s edge-reachable
+  // subgraph together — exercised directly against a hand-built `order`
+  // instead of round-tripping through `lowerGraph`/`resolveOrder`.
+  function chunkNode(id: string, name: string, requires: string[] = []): ShaderNode {
+    return {
+      id,
+      type: 'chunk.raw',
+      position: { x: 0, y: 0 },
+      params: [],
+      chunkSource: { name, text: `/* ${name} */`, requires },
+    };
+  }
+
+  it('is silent when every requires name is present and correctly ordered', () => {
+    const graph: ShaderGraph = {
+      nodes: [chunkNode('a', 'GLSL_FBM'), chunkNode('b', 'GLSL_CLOUDS', ['GLSL_FBM'])],
+      edges: [],
+      outputNodeId: 'b',
+    };
+    const handle = createEmitSink();
+
+    checkChunkRequires(graph, ['a', 'b'], handle.sink);
+
+    expect(handle.diagnostics).toEqual([]);
+  });
+
+  it('is silent for a graph with no chunk nodes at all', () => {
+    const graph: ShaderGraph = {
+      nodes: [{ id: 'a', type: 'input.uv', position: { x: 0, y: 0 }, params: [] }],
+      edges: [],
+      outputNodeId: 'a',
+    };
+    const handle = createEmitSink();
+
+    checkChunkRequires(graph, ['a'], handle.sink);
+
+    expect(handle.diagnostics).toEqual([]);
+  });
+
+  it('warns when a required chunk is absent from the graph', () => {
+    const graph: ShaderGraph = {
+      nodes: [chunkNode('b', 'GLSL_CLOUDS', ['GLSL_FBM', 'GLSL_PLATES'])],
+      edges: [],
+      outputNodeId: 'b',
+    };
+    const handle = createEmitSink();
+
+    checkChunkRequires(graph, ['b'], handle.sink);
+
+    expect(handle.diagnostics).toHaveLength(2);
+    for (const d of handle.diagnostics) {
+      expect(d.level).toBe('warning');
+      expect(d.nodeId).toBe('b');
+    }
+    expect(handle.diagnostics[0].message).toContain('GLSL_FBM');
+    expect(handle.diagnostics[1].message).toContain('GLSL_PLATES');
+  });
+
+  it('warns when a required chunk is present but emitted after it', () => {
+    const graph: ShaderGraph = {
+      nodes: [chunkNode('a', 'GLSL_CLOUDS', ['GLSL_FBM']), chunkNode('b', 'GLSL_FBM')],
+      edges: [],
+      outputNodeId: 'a',
+    };
+    const handle = createEmitSink();
+
+    // 'a' (which requires 'GLSL_FBM') is emitted BEFORE 'b' (which IS
+    // 'GLSL_FBM') in this order — the wrong way around.
+    checkChunkRequires(graph, ['a', 'b'], handle.sink);
+
+    expect(handle.diagnostics).toHaveLength(1);
+    expect(handle.diagnostics[0].level).toBe('warning');
+    expect(handle.diagnostics[0].nodeId).toBe('a');
+    expect(handle.diagnostics[0].message).toContain('come before it');
+  });
+
+  it('does not flag a required chunk that is present but not part of the resolved order (e.g. pruned)', () => {
+    const graph: ShaderGraph = {
+      nodes: [chunkNode('a', 'GLSL_CLOUDS', ['GLSL_FBM']), chunkNode('b', 'GLSL_FBM')],
+      edges: [],
+      outputNodeId: 'a',
+    };
+    const handle = createEmitSink();
+
+    // 'b' never made it into `order` at all (as if pruned/unreachable) —
+    // absent-from-order is treated as "can't confirm ordering", not a
+    // second, redundant "missing" diagnostic (it IS present in the graph).
+    checkChunkRequires(graph, ['a'], handle.sink);
+
+    expect(handle.diagnostics).toEqual([]);
   });
 });

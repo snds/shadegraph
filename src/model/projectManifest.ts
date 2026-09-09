@@ -111,6 +111,37 @@ export function emptyManifest(name = 'Untitled project'): ProjectManifest {
   };
 }
 
+// ── State transitions ────────────────────────────────────────────────────────
+// Phase 5's "selective graphing" action moves exactly one `DiscoveredObject`
+// through the tiered states this module's header describes. Pure/immutable,
+// matching every other function here: returns a new manifest, never mutates
+// the one passed in.
+
+/** Promotes one discovered object from `discovered` to `draft` — "the user
+ *  has started graphing it" (see `DiscoveredObjectState`'s doc comment).
+ *  `meta.updated` is refreshed to now. A no-op (returns `manifest` unchanged)
+ *  if `objectId` names no discovered object, since a caller acting on stale
+ *  or already-removed data should get back a manifest, not a thrown error. */
+export function setDiscoveredObjectDraft(
+  manifest: ProjectManifest,
+  objectId: string,
+  draft: ShaderDocument,
+): ProjectManifest {
+  const index = manifest.discoveredObjects.findIndex((o) => o.id === objectId);
+  if (index === -1) return manifest;
+
+  const discoveredObjects = manifest.discoveredObjects.slice();
+  discoveredObjects[index] = {
+    ...discoveredObjects[index],
+    state: { status: 'draft', draft },
+  };
+  return {
+    ...manifest,
+    discoveredObjects,
+    meta: { ...manifest.meta, updated: new Date().toISOString() },
+  };
+}
+
 // ── (De)serialisation ────────────────────────────────────────────────────────
 // Same lossless-round-trip discipline as `serialize.ts`: `parseManifest`
 // validates shape and schema version, then hands back exactly what was
