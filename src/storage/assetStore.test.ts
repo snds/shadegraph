@@ -305,6 +305,33 @@ describe('createAssetStore — recognizeNode', () => {
     expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
   });
 
+  it('keeps the recognized object(s) and the exact source text alongside "recognized: true"', async () => {
+    const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('noise.glsl');
+
+    const node = store.getState().nodesById['noise.glsl'];
+    expect(node.sourceText).toBe(RECOGNITION_TEXT['noise.glsl']);
+    expect(node.recognizedObjects).toHaveLength(1);
+    expect(node.recognizedObjects?.[0]).toMatchObject({ name: 'noise.glsl', uniforms: ['uTime'] });
+  });
+
+  it('leaves recognizedObjects/sourceText unset for a node that is not recognized', async () => {
+    const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('notes.txt');
+
+    const node = store.getState().nodesById['notes.txt'];
+    expect(node.recognizedObjects).toBeUndefined();
+    expect(node.sourceText).toBeUndefined();
+  });
+
   it('skips reading text for a file whose extension cannot match, marking it unrecognized', async () => {
     const reader = fixtureReader(RECOGNITION_FIXTURE, RECOGNITION_TEXT);
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });

@@ -82,6 +82,71 @@ describe('connected folders', () => {
     store().removeConnectedFolder('nope');
     expect(store().manifest).toBe(before);
   });
+
+  it('ensureConnectedFolder creates a folder on first call', () => {
+    const id = store().ensureConnectedFolder('Assets');
+    expect(store().manifest.connectedFolders).toEqual([{ id, name: 'Assets' }]);
+  });
+
+  it('ensureConnectedFolder returns the SAME id for a repeat name, without duplicating', () => {
+    const first = store().ensureConnectedFolder('Assets');
+    const second = store().ensureConnectedFolder('Assets');
+    expect(second).toBe(first);
+    expect(store().manifest.connectedFolders).toHaveLength(1);
+  });
+
+  it('ensureConnectedFolder does not match a folder added directly via addConnectedFolder', () => {
+    const direct = store().addConnectedFolder('Assets');
+    const ensured = store().ensureConnectedFolder('Assets');
+    expect(ensured).toBe(direct);
+    expect(store().manifest.connectedFolders).toHaveLength(1);
+  });
+});
+
+describe('ensureDiscoveredObject', () => {
+  it('creates a new "discovered" object on first call', () => {
+    const id = store().ensureDiscoveredObject({
+      folderId: 'folder-1',
+      path: ['shaders', 'terrain.glsl'],
+      name: 'terrain.glsl',
+    });
+    const obj = store().manifest.discoveredObjects.find((o) => o.id === id);
+    expect(obj).toMatchObject({
+      folderId: 'folder-1',
+      path: ['shaders', 'terrain.glsl'],
+      name: 'terrain.glsl',
+      metadata: { tags: [] },
+      state: { status: 'discovered' },
+    });
+  });
+
+  it('returns the SAME id for a repeat (folderId, path, name), without duplicating', () => {
+    const input = { folderId: 'folder-1', path: ['a.glsl'], name: 'a.glsl' };
+    const first = store().ensureDiscoveredObject(input);
+    const second = store().ensureDiscoveredObject(input);
+    expect(second).toBe(first);
+    expect(store().manifest.discoveredObjects).toHaveLength(1);
+  });
+
+  it('treats a different folderId as a different object even with the same path/name', () => {
+    const a = store().ensureDiscoveredObject({ folderId: 'folder-1', path: ['a.glsl'], name: 'a.glsl' });
+    const b = store().ensureDiscoveredObject({ folderId: 'folder-2', path: ['a.glsl'], name: 'a.glsl' });
+    expect(b).not.toBe(a);
+    expect(store().manifest.discoveredObjects).toHaveLength(2);
+  });
+
+  it('does not disturb an already-"draft" object it matches', () => {
+    const id = seedDiscoveredObject({
+      folderId: 'folder-1',
+      path: ['a.glsl'],
+      name: 'a.glsl',
+      state: { status: 'draft', draft: emptyDocument('Draft') },
+    });
+    const returned = store().ensureDiscoveredObject({ folderId: 'folder-1', path: ['a.glsl'], name: 'a.glsl' });
+    expect(returned).toBe(id);
+    expect(store().manifest.discoveredObjects).toHaveLength(1);
+    expect(store().manifest.discoveredObjects[0].state.status).toBe('draft');
+  });
 });
 
 describe('discovered-object transitions', () => {

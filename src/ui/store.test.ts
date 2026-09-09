@@ -92,6 +92,46 @@ describe('addNode', () => {
   });
 });
 
+describe('addPreparedNode', () => {
+  it('inserts an already-constructed node into the active graph verbatim', () => {
+    const prepared = {
+      id: 'chunk_1',
+      type: 'chunk.raw',
+      position: { x: 5, y: 9 },
+      params: [{ id: 'uTime', label: 'uTime', type: 'float' as const, value: 0, ui: 'number' as const }],
+      previewEnabled: false,
+      chunkSource: { name: 'GLSL_TERRAIN', text: 'uniform float uTime;', requires: [] },
+    };
+
+    const id = store().addPreparedNode(prepared);
+    expect(id).toBe('chunk_1');
+
+    const node = graph().nodes.find((n) => n.id === 'chunk_1');
+    expect(node).toEqual(prepared);
+    expect(store().lastError).toBeNull();
+  });
+
+  it('never consults the node registry at all (unlike addNode)', () => {
+    // "chunk.raw" is not registered in this test's registry instance at
+    // all — addNode would refuse it with "Unknown node type"; addPreparedNode
+    // must still add it verbatim, since it never looks the type up.
+    const prepared = {
+      id: 'chunk_2',
+      type: 'chunk.raw',
+      position: { x: 0, y: 0 },
+      params: [{ id: 'uScale', label: 'uScale', type: 'float' as const, value: 2, ui: 'number' as const }],
+      previewEnabled: false,
+      chunkSource: { name: 'GLSL_CLOUDS', text: 'uniform float uScale;', requires: ['GLSL_TERRAIN'] },
+    };
+
+    store().addPreparedNode(prepared);
+
+    const node = graph().nodes.find((n) => n.id === 'chunk_2');
+    expect(node?.params).toEqual(prepared.params);
+    expect(node?.chunkSource).toEqual(prepared.chunkSource);
+  });
+});
+
 describe('connect', () => {
   it('accepts a legal vec3 → color link and stores one edge', () => {
     const noise = add('test.noise');

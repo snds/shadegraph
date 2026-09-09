@@ -293,6 +293,15 @@ export interface EditorStore {
   // Graph
   /** Instantiate a registry node type into the active graph. Returns its id. */
   addNode: (type: string, position: { x: number; y: number }) => string | null;
+  /** Insert an already fully-constructed `ShaderNode` into the graph
+   *  currently being edited, unlike `addNode` (which builds a fresh node
+   *  from a registry type's own defaults) — for callers that construct a
+   *  node's content themselves, e.g. the asset browser's "graph this"
+   *  action (`graphFromRecognizedObject`'s `chunk.raw` node ships its own
+   *  `params`/`chunkSource` derived from a recognized shader object, not
+   *  the registry's empty defaults). Returns the node's id, or `null` (with
+   *  `lastError`) if there is no active graph to add it to. */
+  addPreparedNode: (node: ShaderNode) => string | null;
   removeNodes: (ids: string[]) => void;
   moveNode: (id: string, position: { x: number; y: number }) => void;
   connect: (source: EndpointRef, target: EndpointRef) => ConnectionCheck;
@@ -438,6 +447,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       params: def.params ? deepClone(def.params) : [],
       previewEnabled: def.previewable ?? false,
     };
+    const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => ({
+      ...graph,
+      nodes: [...graph.nodes, node],
+    }));
+    if (!doc) {
+      set({ lastError: 'No active layer to add a node to.' });
+      return null;
+    }
+    set({ doc, lastError: null });
+    return node.id;
+  },
+
+  addPreparedNode(node) {
     const doc = withActiveGraph(get().doc, get().editingTarget, (graph) => ({
       ...graph,
       nodes: [...graph.nodes, node],

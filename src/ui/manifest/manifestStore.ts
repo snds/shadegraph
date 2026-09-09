@@ -40,6 +40,18 @@ function makeConnectedFolderId(): string {
   return `folder_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Same treatment as `makeConnectedFolderId`, for a new `DiscoveredObject`'s
+ *  id — kept local here for the same reason (a discovered object's id is a
+ *  manifest-store concern, not a model one; `projectManifest.ts` never
+ *  generates ids itself). */
+function makeDiscoveredObjectId(): string {
+  return `obj_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function pathsEqual(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((seg, i) => seg === b[i]);
+}
+
 /** Stamp `meta.updated`. Called by every mutation, exactly like `store.ts`'s
  *  `touch` does for the document. */
 function touch(manifest: ProjectManifest): ProjectManifest {
@@ -74,8 +86,25 @@ export interface ManifestStore {
   addConnectedFolder: (name: string) => string;
   /** No-op if `id` names no connected folder. */
   removeConnectedFolder: (id: string) => void;
+  /** Find-or-create by name: returns an existing `ConnectedFolderRef.id`
+   *  whose `name` matches, or appends a new one (via `addConnectedFolder`)
+   *  if none does. The idempotent counterpart `addConnectedFolder` doesn't
+   *  provide, for a caller that only knows a display name (e.g. the asset
+   *  browser's connected root) and must not append a duplicate folder ref
+   *  every time it acts. */
+  ensureConnectedFolder: (name: string) => string;
 
   // Discovered-object state transitions (see the module doc comment above)
+  /** Find-or-create: returns an existing `DiscoveredObject.id` matching
+   *  `folderId` + `path` + `name`, or appends a new one in `discovered`
+   *  state if none does. The "create" half of the discovered-object
+   *  lifecycle this store otherwise only transitions (see
+   *  `manifestStore.test.ts`'s `seedDiscoveredObject` comment) — needed so
+   *  the asset browser's "graph this" action has a real discovered-object
+   *  id to move to `draft` for an object it may be seeing for the first
+   *  time. Idempotent: calling it again for the same object never
+   *  duplicates the entry. */
+  ensureDiscoveredObject: (input: { folderId: string; path: string[]; name: string }) => string;
   /** Merge `patch` into one discovered object's free-form metadata. */
   setDiscoveredObjectMetadata: (objectId: string, patch: Partial<DiscoveredObjectMetadata>) => void;
   /** "discovered" → "draft": wraps `projectManifest.ts`'s own helper. */
@@ -120,6 +149,35 @@ export const useManifestStore = create<ManifestStore>((set, get) => ({
       }),
       lastError: null,
     });
+  },
+
+  ensureConnectedFolder(name) {
+    const trimmed = name.trim() || 'Untitled folder';
+    const existing = get().manifest.connectedFolders.find((f) => f.name === trimmed);
+    if (existing) return existing.id;
+    return get().addConnectedFolder(name);
+  },
+
+  ensureDiscoveredObject({ folderId, path, name }) {
+    const manifest = get().manifest;
+    const existing = manifest.discoveredObjects.find(
+      (o) => o.folderId === folderId && o.name === name && pathsEqual(o.path, path),
+    );
+    if (existing) return existing.id;
+
+    const object: DiscoveredObject = {
+      id: makeDiscoveredObjectId(),
+      folderId,
+      path,
+      name,
+      metadata: { tags: [] },
+      state: { status: 'discovered' },
+    };
+    set({
+      manifest: touch({ ...manifest, discoveredObjects: [...manifest.discoveredObjects, object] }),
+      lastError: null,
+    });
+    return object.id;
   },
 
   setDiscoveredObjectMetadata(objectId, patch) {

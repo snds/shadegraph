@@ -18,15 +18,47 @@
 // fully independent React tree at the root is the least invasive way to get
 // this self-contained pane on screen. See `src/main.tsx` for the one-line
 // addition.
+//
+// The "graph this" action (Phase 5 Wave 5b, the last missing link between
+// `graphFromRecognizedObject()`/the manifest store and an actual user-facing
+// feature) is wired here too. The orchestration itself is pure and lives in
+// `./graphThis.ts` — this component only supplies the button, the real
+// `useEditorStore`/`useManifestStore` getters, and surfacing the result.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { flattenVisibleTree, useAssetStore, type AssetTreeNode } from '../../storage';
+import type { RecognizedShaderObject } from '../../storage/recognition';
+import { useManifestStore } from '../manifest/manifestStore';
+import { useEditorStore } from '../store';
+import { graphThis, type GraphThisResult } from './graphThis';
 import { useVirtualRows } from './useVirtualRows';
 import './assetBrowser.css';
 
 const ROW_HEIGHT = 28;
+
+/** A "graph this" outcome worth telling the user about. `missing-requires`
+ *  is the one refusal this task's brief explicitly requires surfacing
+ *  visibly (never a silent no-op); `success`/`error` are shown the same way
+ *  for consistency, not because the brief asked for those specifically. */
+interface GraphThisMessage {
+  kind: 'success' | 'missing-requires' | 'error';
+  text: string;
+}
+
+function messageFor(object: RecognizedShaderObject, result: GraphThisResult): GraphThisMessage {
+  if (result.ok) {
+    return { kind: 'success', text: `Graphed "${object.name}" — added to the document as a draft.` };
+  }
+  if (result.reason === 'missing-requires') {
+    return {
+      kind: 'missing-requires',
+      text: `Can't graph "${object.name}" yet — it requires ${result.missing.join(', ')} to be graphed first.`,
+    };
+  }
+  return { kind: 'error', text: `Couldn't graph "${object.name}": no active layer to add it to.` };
+}
 
 export function AssetBrowserPanel() {
   const [open, setOpen] = useState(false);
@@ -37,6 +69,27 @@ export function AssetBrowserPanel() {
   const connect = useAssetStore((s) => s.connect);
   const grantPermission = useAssetStore((s) => s.grantPermission);
   const disconnect = useAssetStore((s) => s.disconnect);
+
+  const [graphThisMessage, setGraphThisMessage] = useState<GraphThisMessage | null>(null);
+
+  // Not a hook-level selector: read fresh at click time, same treatment as
+  // every other `useEditorStore`/`useManifestStore` access inside this
+  // handler — `graphThis` itself decides exactly when each is read
+  // (documented on `GraphThisDeps`), so nothing here should trigger a
+  // re-render of its own.
+  const handleGraphThis = useCallback((node: AssetTreeNode, object: RecognizedShaderObject) => {
+    if (node.sourceText === undefined) return; // recognized nodes always carry this; defensive only
+    const connectedFolderName = useAssetStore.getState().rootName ?? 'Connected folder';
+    const result = graphThis(object, node.sourceText, connectedFolderName, {
+      getDocument: () => useEditorStore.getState().doc,
+      getManifest: () => useManifestStore.getState().manifest,
+      addPreparedNode: (n) => useEditorStore.getState().addPreparedNode(n),
+      ensureConnectedFolder: (name) => useManifestStore.getState().ensureConnectedFolder(name),
+      ensureDiscoveredObject: (input) => useManifestStore.getState().ensureDiscoveredObject(input),
+      setDiscoveredObjectDraft: (id, draft) => useManifestStore.getState().setDiscoveredObjectDraft(id, draft),
+    });
+    setGraphThisMessage(messageFor(object, result));
+  }, []);
 
   useEffect(() => {
     // Once, at boot, regardless of whether the panel is open yet — so a
@@ -104,7 +157,24 @@ export function AssetBrowserPanel() {
               </div>
             ) : null}
 
-            {status === 'connected' ? <AssetTreeView /> : null}
+            {graphThisMessage ? (
+              <div
+                className={`sg-assets-graph-message sg-assets-graph-message--${graphThisMessage.kind}`}
+                role={graphThisMessage.kind === 'missing-requires' ? 'alert' : 'status'}
+              >
+                <span>{graphThisMessage.text}</span>
+                <button
+                  type="button"
+                  className="sg-assets-graph-message__dismiss"
+                  onClick={() => setGraphThisMessage(null)}
+                  aria-label="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            ) : null}
+
+            {status === 'connected' ? <AssetTreeView onGraphThis={handleGraphThis} /> : null}
           </div>
 
           {status === 'connected' ? (
@@ -124,7 +194,11 @@ export function AssetBrowserPanel() {
  *  so its mount/unmount lifecycle (tied to the `status === 'connected'`
  *  branch above) is what drives releasing every still-visible preview URL —
  *  disconnecting or closing the panel unmounts this and runs that cleanup. */
-function AssetTreeView() {
+function AssetTreeView({
+  onGraphThis,
+}: {
+  onGraphThis: (node: AssetTreeNode, object: RecognizedShaderObject) => void;
+}) {
   const nodesById = useAssetStore((s) => s.nodesById);
   const rootIds = useAssetStore((s) => s.rootIds);
   const toggleExpand = useAssetStore((s) => s.toggleExpand);
@@ -184,7 +258,7 @@ function AssetTreeView() {
       <div className="sg-assets-list__spacer" style={{ height: range.totalHeight }}>
         <div className="sg-assets-list__window" style={{ transform: `translateY(${range.offsetY}px)` }}>
           {rows.map((node) => (
-            <AssetRow key={node.id} node={node} onToggle={toggleExpand} />
+            <AssetRow key={node.id} node={node} onToggle={toggleExpand} onGraphThis={onGraphThis} />
           ))}
         </div>
       </div>
@@ -192,8 +266,17 @@ function AssetTreeView() {
   );
 }
 
-function AssetRow({ node, onToggle }: { node: AssetTreeNode; onToggle: (id: string) => Promise<void> }) {
+function AssetRow({
+  node,
+  onToggle,
+  onGraphThis,
+}: {
+  node: AssetTreeNode;
+  onToggle: (id: string) => Promise<void>;
+  onGraphThis: (node: AssetTreeNode, object: RecognizedShaderObject) => void;
+}) {
   const isFolder = node.kind === 'folder';
+  const recognizedObjects = node.recognizedObjects ?? [];
   return (
     <div
       className="sg-assets-row"
@@ -233,6 +316,25 @@ function AssetRow({ node, onToggle }: { node: AssetTreeNode; onToggle: (id: stri
           shader
         </span>
       ) : null}
+
+      {recognizedObjects.map((object) => (
+        <button
+          key={object.id}
+          type="button"
+          className="sg-assets-row__graph-btn"
+          // Only ONE object graphed per click — never a bulk "graph all"
+          // affordance, per this task's own scope. A row with more than one
+          // recognized object (a bundled-chunk `RecognitionConfig`) gets one
+          // button per object instead, each still a single-object action.
+          onClick={(event) => {
+            event.stopPropagation();
+            onGraphThis(node, object);
+          }}
+          title={`Graph "${object.name}" into the active document`}
+        >
+          {recognizedObjects.length > 1 ? `Graph "${object.name}"` : 'Graph this'}
+        </button>
+      ))}
     </div>
   );
 }

@@ -85,3 +85,27 @@
   color: var(--sg-accent); border: 1px solid var(--sg-accent); border-radius: 3px;
   padding: 1px 4px; line-height: 1.4;
 }
+
+.sg-assets-row__graph-btn {
+  flex: none; font: inherit; font-size: 10px; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: 3px; padding: 1px 6px; cursor: pointer;
+}
+.sg-assets-row__graph-btn:hover { border-color: var(--sg-accent); color: #fff; }
+
+/* "graph this" outcome banner — never a silent no-op on a `missing-requires`
+   refusal (this task's own requirement); shown above the virtualized list,
+   never inside a row (a row's height is fixed at `ROW_HEIGHT` for the
+   virtualization math, so a message never lives there). */
+.sg-assets-graph-message {
+  flex: none; display: flex; align-items: flex-start; gap: 6px;
+  font-size: 11px; padding: 8px 10px; border-bottom: 1px solid var(--sg-line);
+}
+.sg-assets-graph-message span { flex: 1; }
+.sg-assets-graph-message--success { color: var(--sg-text); }
+.sg-assets-graph-message--missing-requires { color: var(--sg-danger); }
+.sg-assets-graph-message--error { color: var(--sg-danger); }
+.sg-assets-graph-message__dismiss {
+  font: inherit; font-size: 13px; line-height: 1; color: var(--sg-dim);
+  background: transparent; border: 0; cursor: pointer; padding: 0 2px; flex: none;
+}
+.sg-assets-graph-message__dismiss:hover { color: var(--sg-text); }

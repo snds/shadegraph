@@ -10,6 +10,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type { AssetEntryKind, PreviewKind } from './types';
+import type { RecognizedShaderObject } from './recognition/types';
 
 export type PreviewState = 'idle' | 'loading' | 'loaded' | 'unavailable';
 
@@ -34,6 +35,17 @@ export interface AssetTreeNode {
    *  `recognizeShaderObjects` (`src/storage/recognition/recognize.ts`).
    *  Populated lazily by `assetStore.ts`'s `recognizeNode`, never eagerly. */
   recognized?: boolean;
+  /** The object(s) `recognizeShaderObjects` found for this node once
+   *  `recognized` is `true` (`undefined` otherwise, including the common
+   *  not-a-shader-file case) — one node can yield more than one object for a
+   *  bundled-chunk config. Lets a "graph this" action call
+   *  `graphFromRecognizedObject` directly, without re-recognizing. */
+  recognizedObjects?: RecognizedShaderObject[];
+  /** The exact text `recognizedObjects` was recognized from, kept only
+   *  alongside a `true` `recognized` result — the "already-read source text"
+   *  a "graph this" action passes straight through to
+   *  `graphFromRecognizedObject`, never re-read from disk. */
+  sourceText?: string;
 }
 
 export function nodeId(path: string[]): string {
@@ -55,6 +67,8 @@ export function makeNode(path: string[], name: string, kind: AssetEntryKind, par
     previewKind: undefined,
     previewState: 'idle',
     recognized: undefined,
+    recognizedObjects: undefined,
+    sourceText: undefined,
   };
 }
 

@@ -275,7 +275,14 @@ export function createAssetStore(deps: AssetStoreDeps) {
             return;
           }
           const objects = recognizeShaderObjects([node], { [id]: text }, config);
-          patchNode(id, { recognized: objects.length > 0 });
+          if (objects.length > 0) {
+            // Keep the objects + the exact text they came from, so a
+            // "graph this" action can call `graphFromRecognizedObject`
+            // directly off this node without re-reading/re-recognizing.
+            patchNode(id, { recognized: true, recognizedObjects: objects, sourceText: text });
+          } else {
+            patchNode(id, { recognized: false });
+          }
         } catch {
           patchNode(id, { recognized: false });
         }
