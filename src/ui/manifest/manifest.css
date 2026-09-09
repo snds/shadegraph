@@ -1,0 +1,128 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — project-manifest panel styles
+   Owned by ManifestRoot.tsx/ManifestPanel.tsx and imported from them.
+   References the shared tokens from `app.css` (--sg-*), never raw hex, same
+   discipline as `toolbar.css`/`settings.css`.
+
+   `.sg-field`/`.sg-linkbtn`/`.sg-file-input` are the shared field/link-button/
+   hidden-input chrome also defined in `toolbar.css`/`settings.css`.
+   Redeclared here (identical rules) so this pane never depends on another
+   pane's module having been imported first to look right.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-field {
+  font: inherit; color: var(--sg-text); background: var(--sg-raised);
+  border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  padding: 3px 6px; width: 100%; min-width: 0;
+}
+.sg-field:focus { outline: none; border-color: var(--sg-accent); }
+
+.sg-linkbtn {
+  background: none; border: none; padding: 0; color: var(--sg-accent);
+  cursor: pointer; font: inherit; text-decoration: underline;
+}
+.sg-linkbtn:hover { color: #fff; }
+
+.sg-file-input { display: none; }
+
+.sg-manifest__toggle {
+  position: fixed;
+  top: 8px;
+  /* Settings sits at right:12px, Perf at right:48px, Critique at right:84px
+     (all 28px square, 36px apart) — this continues that spacing so no two
+     toggles overlap. */
+  right: 120px;
+  z-index: 40;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--sg-radius);
+  border: 1px solid var(--sg-line);
+  background: var(--sg-panel);
+  color: var(--sg-text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.sg-manifest__toggle:hover { border-color: var(--sg-accent); }
+
+.sg-manifest__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.sg-manifest__dialog {
+  position: relative;
+  width: 360px;
+  max-width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+  background: var(--sg-panel);
+  border-left: 1px solid var(--sg-line);
+}
+
+.sg-manifest__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--sg-radius);
+  border: 1px solid var(--sg-line);
+  background: var(--sg-raised);
+  color: var(--sg-text);
+  cursor: pointer;
+}
+
+.sg-manifest__actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sg-manifest__error {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--sg-danger);
+  border-radius: var(--sg-radius);
+  color: var(--sg-danger);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sg-manifest__section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sg-line);
+  display: grid;
+  gap: 6px;
+}
+.sg-manifest__section-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--sg-dim);
+}
+
+.sg-manifest__folders { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.sg-manifest__folder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius);
+  background: var(--sg-raised);
+  font-size: 12px;
+}
+
+.sg-manifest__add-folder { display: flex; gap: 6px; margin-top: 4px; }
