@@ -25,8 +25,13 @@ const UNIFORM_DECLARATION = /\buniform\s+[A-Za-z_][\w]*\s+([A-Za-z_]\w*)\s*(?:\[
 
 /** `export const <Name> = <quote>` — the generic shape of a bundled
  *  string-constant chunk. Which export *names* count as shader objects is
- *  entirely config-driven via `exportNamePattern`. */
-const EXPORTED_CONST = /export\s+const\s+([A-Za-z_]\w*)\s*=\s*(`|"|')/g;
+ *  entirely config-driven via `exportNamePattern`. Tolerates an optional
+ *  `/* ... *\/` language-hint comment between `=` and the opening quote
+ *  (e.g. `export const NAME = /* glsl *\/ \`...\``) — a common
+ *  tagged-template/syntax-highlighting convention across many codebases,
+ *  not specific to any one source. The comment body itself must not
+ *  contain a nested `*\/`. */
+const EXPORTED_CONST = /export\s+const\s+([A-Za-z_]\w*)\s*=\s*(?:\/\*[^]*?\*\/\s*)?(`|"|')/g;
 
 function detectUniforms(source: string): string[] {
   const seen = new Set<string>();

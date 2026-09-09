@@ -51,6 +51,19 @@ uniform vec3 uSunDirection;
 void main() {}
 `;
 
+// Reproduces the exact real-world Legion bundling convention: a
+// `/* glsl */` language-hint comment (for VS Code syntax highlighting)
+// between `=` and the opening backtick. Regression fixture for the
+// EXPORTED_CONST regex — see task "Fix EXPORTED_CONST regex: tolerate a
+// language-hint comment before the quote".
+const BUNDLED_CHUNK_WITH_LANGUAGE_HINT_SOURCE = `
+export const GLSL_FBM = /* glsl */ \`
+  uniform float uNoiseSeed;
+
+  float fbm(vec2 p) { return hash(p); }
+\`;
+`;
+
 function config(overrides: Partial<RecognitionConfig> = {}): RecognitionConfig {
   return {
     fileExtensions: ['.glsl', '.wgsl'],
@@ -117,6 +130,20 @@ describe('recognizeShaderObjects', () => {
     const node = makeNode(['README.md'], 'README.md', 'file');
     const result = recognizeShaderObjects([node], { [node.id]: 'uniform float uUnused;' }, config());
     expect(result).toEqual([]);
+  });
+
+  it('recognizes a bundled chunk with a `/* glsl */` language-hint comment before the quote', () => {
+    const node = makeNode(['src', 'shaders.ts'], 'shaders.ts', 'file');
+    const result = recognizeShaderObjects(
+      [node],
+      { [node.id]: BUNDLED_CHUNK_WITH_LANGUAGE_HINT_SOURCE },
+      config(),
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('GLSL_FBM');
+    expect(result[0].uniforms).toEqual(['uNoiseSeed']);
+    expect(result[0].nodeId).toBe(node.id);
   });
 
   it('does not extract bundled chunks when no exportNamePattern is configured', () => {
