@@ -18,6 +18,7 @@
 import { useRef, useState } from 'react';
 
 import type { PerformanceBudgetPopulationConfig, ReferenceCritiqueApiConfig } from '../../model/settings';
+import { defaultRecognitionConfigId, recognitionConfigOptions, useAssetStore } from '../../storage';
 import { useProjectSettings } from './useProjectSettings';
 import './settings.css';
 
@@ -122,6 +123,25 @@ function VariationRangesEditor({
 export function SettingsPanel() {
   const [settings, update] = useProjectSettings();
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
+
+  // The selector's initial value reflects whichever config is ACTUALLY active
+  // on `useAssetStore` right now (falling back to the generic default id if
+  // it doesn't match a known option, e.g. nothing has been set yet) — not a
+  // fixed default — so reopening this panel after a switch shows the true
+  // current selection rather than visually resetting to "Generic".
+  const activeRecognitionConfig = useAssetStore((s) => s.recognitionConfig);
+  const setStoreRecognitionConfig = useAssetStore((s) => s.setRecognitionConfig);
+  const [recognitionConfigId, setRecognitionConfigId] = useState<string>(
+    () =>
+      recognitionConfigOptions.find((option) => option.config === activeRecognitionConfig)?.id ??
+      defaultRecognitionConfigId,
+  );
+
+  function selectRecognitionConfig(id: string) {
+    const option = recognitionConfigOptions.find((o) => o.id === id) ?? recognitionConfigOptions[0];
+    setRecognitionConfigId(option.id);
+    setStoreRecognitionConfig(option.config);
+  }
 
   const critique = settings.referenceCritique;
   const critiqueIsApi = critique?.provider === 'api';
@@ -313,6 +333,31 @@ export function SettingsPanel() {
           onAdd={addRangeRow}
           onRemove={removeRangeRow}
         />
+      </section>
+
+      <section className="sg-settings__section">
+        <h3 className="sg-settings__section-title">Recognition config</h3>
+        <p className="sg-settings__hint">
+          Which shader-object pattern the asset browser checks files against on the next connect/expand. Already
+          recognized files are not rechecked.
+        </p>
+
+        <label className="sg-settings__field" htmlFor="sg-settings-recognition-config">
+          Active config
+        </label>
+        <select
+          id="sg-settings-recognition-config"
+          className="sg-field"
+          aria-label="Active recognition config"
+          value={recognitionConfigId}
+          onChange={(e) => selectRecognitionConfig(e.target.value)}
+        >
+          {recognitionConfigOptions.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </section>
     </div>
   );

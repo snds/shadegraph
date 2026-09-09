@@ -366,6 +366,56 @@ describe('createAssetStore — recognizeNode', () => {
   });
 });
 
+describe('createAssetStore — setRecognitionConfig', () => {
+  const SWAP_FIXTURE: Record<string, AssetEntry[]> = {
+    '': [{ name: 'noise.glsl', kind: 'file' }],
+  };
+  const SWAP_TEXT: Record<string, string> = {
+    'noise.glsl': 'uniform float uTime;\nvoid main() {}',
+  };
+
+  it('seeds recognitionConfig state from deps.recognitionConfig', () => {
+    const deps = makeDeps({ recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    expect(store.getState().recognitionConfig).toEqual({ fileExtensions: ['.glsl'] });
+  });
+
+  it('changes what the NEXT recognizeNode call matches on', async () => {
+    const reader = fixtureReader(SWAP_FIXTURE, SWAP_TEXT);
+    // Starts with a config that cannot possibly match `.glsl`.
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.wgsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('noise.glsl');
+    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(false);
+
+    // Swap to a config that matches `.glsl`. Reconnecting gives the store a
+    // fresh, unrecognized node so the new config's next check is observable
+    // (already-checked nodes are deliberately not retroactively rechecked).
+    store.getState().setRecognitionConfig({ fileExtensions: ['.glsl'] });
+    expect(store.getState().recognitionConfig).toEqual({ fileExtensions: ['.glsl'] });
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('noise.glsl');
+    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+  });
+
+  it('does not retroactively re-check an already-recognized node after a config swap', async () => {
+    const reader = fixtureReader(SWAP_FIXTURE, SWAP_TEXT);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    await store.getState().recognizeNode('noise.glsl');
+    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+
+    store.getState().setRecognitionConfig({ fileExtensions: ['.wgsl'] });
+    await store.getState().recognizeNode('noise.glsl'); // no-op: already checked
+    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+  });
+});
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });

@@ -23,8 +23,8 @@ import { create } from 'zustand';
 import { createIndexedDbHandleStore } from './indexedDbHandleStore';
 import { createNativeDirectoryReader } from './nativeDirectoryReader';
 import { createPreviewUrlManager, type PreviewUrlManager } from './previewUrls';
-import { defaultRecognitionConfig } from './recognitionConfig';
 import { recognizeShaderObjects, type RecognitionConfig } from './recognition';
+import { defaultRecognitionConfigId, getRecognitionConfigOption } from './recognitionConfigs';
 import { flattenVisibleTree, makeNode, nodeId, type AssetTreeNode } from './tree';
 import type { DirectoryReader, HandleStore } from './types';
 
@@ -51,6 +51,12 @@ export interface AssetStoreState {
   error?: string;
   nodesById: Record<string, AssetTreeNode>;
   rootIds: string[];
+  /** The config `recognizeNode` currently classifies files against. Seeded
+   *  from `deps.recognitionConfig` at store creation; swap it at runtime via
+   *  `setRecognitionConfig`. Already-recognized nodes (`recognized !==
+   *  undefined`) are NOT retroactively re-checked on a swap — only a fresh
+   *  `recognizeNode` call (e.g. a new connect/expand) sees the new config. */
+  recognitionConfig: RecognitionConfig;
 
   /** Opens the native directory picker, persists the resulting handle, and
    *  lists the top level. A no-op transition back to `disconnected` if the
@@ -87,6 +93,10 @@ export interface AssetStoreState {
    *  undefined`), so it is safe to call repeatedly (e.g. from the same
    *  visibility effect that drives `loadPreview`). */
   recognizeNode: (id: string) => Promise<void>;
+  /** Swaps the config `recognizeNode` matches against on its NEXT call.
+   *  Purely additive to already-checked nodes — see `recognitionConfig`'s
+   *  doc comment. */
+  setRecognitionConfig: (config: RecognitionConfig) => void;
 }
 
 export interface AssetStoreDeps {
@@ -94,9 +104,11 @@ export interface AssetStoreDeps {
   urlManager: PreviewUrlManager;
   pickDirectory: () => Promise<FileSystemDirectoryHandle>;
   createReader: (root: FileSystemDirectoryHandle) => DirectoryReader;
-  /** Config `recognizeNode` classifies files against. Optional — defaults to
-   *  `{}` (nothing recognized) so existing/test deps that omit it keep
-   *  behaving exactly as before. */
+  /** INITIAL config `recognizeNode` classifies files against — seeds the
+   *  store's `recognitionConfig` state once, at creation. Optional — defaults
+   *  to `{}` (nothing recognized) so existing/test deps that omit it keep
+   *  behaving exactly as before. Swap the active config later via the
+   *  store's `setRecognitionConfig` action, not by mutating this object. */
   recognitionConfig?: RecognitionConfig;
 }
 
@@ -138,6 +150,7 @@ export function createAssetStore(deps: AssetStoreDeps) {
       error: undefined,
       nodesById: {},
       rootIds: [],
+      recognitionConfig: deps.recognitionConfig ?? {},
 
       async connect() {
         set({ status: 'connecting', error: undefined });
@@ -261,7 +274,7 @@ export function createAssetStore(deps: AssetStoreDeps) {
         if (!node || node.kind !== 'file' || !currentReader) return;
         if (node.recognized !== undefined) return; // already checked
 
-        const config = deps.recognitionConfig ?? {};
+        const config = get().recognitionConfig;
         if (!isRecognitionCandidate(node.name, config)) {
           patchNode(id, { recognized: false });
           return;
@@ -287,6 +300,10 @@ export function createAssetStore(deps: AssetStoreDeps) {
           patchNode(id, { recognized: false });
         }
       },
+
+      setRecognitionConfig(config) {
+        set({ recognitionConfig: config });
+      },
     };
   });
 }
@@ -300,7 +317,7 @@ export const useAssetStore = createAssetStore({
   urlManager: createPreviewUrlManager(),
   pickDirectory: () => window.showDirectoryPicker({ mode: 'read' }),
   createReader: createNativeDirectoryReader,
-  recognitionConfig: defaultRecognitionConfig,
+  recognitionConfig: getRecognitionConfigOption(defaultRecognitionConfigId).config,
 });
 
 export { flattenVisibleTree, nodeId };
