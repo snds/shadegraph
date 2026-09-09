@@ -5,6 +5,7 @@ import { emptyLayer } from '../../model/factory';
 import type { SocketTypeLookup } from '../../model/connect';
 import { SUBGRAPH_INSTANCE_NODE_TYPE, extractSubGraph } from '../../model/subgraph';
 import { registerStarterNodes } from '../../nodes/definitions';
+import { CHUNK_RAW_NODE_TYPE } from '../../nodes/definitions/chunk';
 import { NodeRegistry, nodes } from '../../nodes/registry';
 import { backends } from '../backend';
 import { coerceGlsl, glslEsBackend, glslLiteral, layerOpacityUniformName } from './glsl-es';
@@ -163,6 +164,67 @@ describe('glslEsBackend.compileGraph', () => {
     expect(rampEntries).toHaveLength(2);
     expect(lines[rampEntries[0].line - 1]).toMatch(/smoothstep\(/);
     expect(lines[rampEntries[1].line - 1]).toMatch(/mix\(/);
+  });
+});
+
+// Phase 5 fidelity verification: a document built via "Selective graphing"
+// (`graphFromRecognizedObject` -> a `chunk.raw` node) must compile through
+// this SAME backend, with no Phase-5-specific branching anywhere in it — see
+// the "Fidelity verification wiring" task note. Regression coverage for the
+// two real gaps that fix found: a `chunk.raw` node has no sockets, so it was
+// silently pruned as unreachable (`resolveOrder`); and even once reachable,
+// its raw text (top-level `uniform`/function declarations) was landing
+// inside `main()` via `emit` instead of ahead of it via the new `prelude`.
+describe('glslEsBackend — chunk.raw fidelity (Phase 5 selective graphing)', () => {
+  const chunkText = [
+    'uniform float uWarp;',
+    'float sg_terrain(vec3 p) {',
+    '  return sin(p.x * uWarp);',
+    '}',
+  ].join('\n');
+
+  function graphWithGraphedChunk(): ShaderGraph {
+    const base = uvFbmRampOutputGraph();
+    return {
+      ...base,
+      nodes: [
+        ...base.nodes,
+        {
+          id: 'chunk1',
+          type: CHUNK_RAW_NODE_TYPE,
+          position: { x: 0, y: 0 },
+          params: [],
+          chunkSource: { name: 'GLSL_TERRAIN', text: chunkText, requires: [] },
+        },
+      ],
+    };
+  }
+
+  it('is not pruned despite having no sockets to reach the output through', () => {
+    const program = glslEsBackend.compileGraph(graphWithGraphedChunk());
+    expect(program.diagnostics).toEqual([]);
+    expect(program.fragment).toContain(chunkText);
+  });
+
+  it('lands its raw uniform/function text ahead of main(), not inside the body', () => {
+    const program = glslEsBackend.compileGraph(graphWithGraphedChunk());
+    const fragment = program.fragment ?? '';
+    const mainIndex = fragment.indexOf('void main() {');
+    const chunkIndex = fragment.indexOf(chunkText);
+    expect(mainIndex).toBeGreaterThan(-1);
+    expect(chunkIndex).toBeGreaterThan(-1);
+    expect(chunkIndex).toBeLessThan(mainIndex);
+  });
+
+  it('round-trips through a full document compile unmodified (no Phase-5 branching in compileDocument)', () => {
+    const doc = emptyDocument('Graphed chunk');
+    doc.layerStack.layers[0].graph = graphWithGraphedChunk();
+
+    const program = glslEsBackend.compileDocument(doc);
+
+    expect(program.diagnostics).toEqual([]);
+    expect(program.fragment).toContain(chunkText);
+    expect(program.fragment).toContain('gl_FragColor');
   });
 });
 

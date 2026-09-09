@@ -16,15 +16,16 @@
 // imported chunk into the rest of a graph is left to a follow-on task, not
 // guessed at here. The emitter's only job is a byte-for-byte passthrough.
 //
-// Known limitation, intentionally not solved by this task: GLSL's `uniform`
-// declarations and function definitions are top-level (outside `main()`), but
-// `EmitContext.emit` only appends statements INSIDE the composed `main()`
-// body (see `assembleFragment` in `backends/glsl-es.ts`) — there is no
-// per-node "prelude" injection point yet. A `chunk.raw` node's raw text is
-// still emitted verbatim (this task's actual scope: model + registry +
-// verbatim passthrough + `requires` bookkeeping, unit-tested via a literal
-// fixture), but a full document containing one will not compile to valid
-// GLSL until a prelude mechanism exists — a separate, compiler-level task.
+// GLSL's `uniform` declarations and function definitions are top-level
+// (outside `main()`), so the raw text is handed to `EmitContext.prelude`
+// (Phase 5 fidelity-verification fix), not `emit` — the backend renders every
+// node's prelude contribution ahead of `main()` (see `assembleFragment` in
+// `backends/glsl-es.ts`), deduped verbatim, so a `chunk.raw` node's text
+// lands exactly once, at the right scope, regardless of dispatch order.
+// Having no sockets also means a `chunk.raw` node is never edge-reachable
+// from the graph's output node; `resolveOrder` (`../../compiler/lower.ts`)
+// forces every `chunkSource`-bearing node in as an extra root for exactly
+// this reason, so a graphed chunk is never silently pruned.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type { NodeDefinition } from '../registry';
@@ -55,8 +56,10 @@ export const chunkRaw: NodeDefinition = {
         return '';
       }
       // Verbatim passthrough — never reconstructed/reparsed, per the Phase 5
-      // sketch's "coarse-grained chunk nodes" decision.
-      ctx.emit(node.chunkSource.text);
+      // sketch's "coarse-grained chunk nodes" decision. `prelude`, not
+      // `emit`: this text is top-level GLSL (uniforms/functions), not a
+      // `main()` body statement.
+      ctx.prelude(node.chunkSource.text);
       return '';
     },
   },

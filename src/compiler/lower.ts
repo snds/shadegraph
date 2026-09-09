@@ -42,6 +42,8 @@ export interface EmitSink {
   temp(prefix?: string): string;
   uniform(spec: UniformSpec): string;
   emit(line: string): void;
+  /** See `EmitContext.prelude` — same contract, this is what backs it. */
+  prelude(text: string): void;
   diag(d: Diagnostic): void;
 }
 
@@ -49,17 +51,22 @@ export interface EmitSinkHandle {
   sink: EmitSink;
   body: string[];
   uniforms: UniformSpec[];
+  /** Top-level source contributed via `sink.prelude`, in first-seen order,
+   *  deduped by exact text. A backend renders these ahead of `main()`. */
+  preludes: string[];
   diagnostics: Diagnostic[];
 }
 
-/** Fresh, empty sink. `uniforms`/`body`/`diagnostics` are live references —
- *  read them any time; they mutate as `sink` is used. */
+/** Fresh, empty sink. `uniforms`/`body`/`preludes`/`diagnostics` are live
+ *  references — read them any time; they mutate as `sink` is used. */
 export function createEmitSink(): EmitSinkHandle {
   let counter = 0;
   const body: string[] = [];
   const diagnostics: Diagnostic[] = [];
   const uniforms: UniformSpec[] = [];
   const uniformNames = new Set<string>();
+  const preludes: string[] = [];
+  const preludeTexts = new Set<string>();
 
   const sink: EmitSink = {
     temp(prefix = 't') {
@@ -75,12 +82,18 @@ export function createEmitSink(): EmitSinkHandle {
     emit(line) {
       body.push(line);
     },
+    prelude(text) {
+      if (!preludeTexts.has(text)) {
+        preludeTexts.add(text);
+        preludes.push(text);
+      }
+    },
     diag(d) {
       diagnostics.push(d);
     },
   };
 
-  return { sink, body, uniforms, diagnostics };
+  return { sink, body, uniforms, preludes, diagnostics };
 }
 
 // ── Backend hooks ────────────────────────────────────────────────────────────
@@ -140,8 +153,17 @@ export function resolveOrder(graph: ShaderGraph, rootNodeIds?: string[]): Resolv
   }
 
   // Reachability: walk backwards (target -> source) from every root.
-  const reachable = new Set<string>(validRoots);
-  const stack: string[] = [...validRoots];
+  //
+  // `chunkSource`-bearing nodes (`chunk.raw`, `src/nodes/definitions/chunk.ts`)
+  // deliberately have no sockets — their contribution is top-level source
+  // (via `EmitContext.prelude`), not a value flowing through an edge to the
+  // output — so a plain backward walk from `rootNodeIds` would never reach
+  // them and they would be silently pruned even when graphed and required by
+  // other nodes' raw text. Force every one of them in as an unconditional
+  // extra root so a graphed chunk always compiles in.
+  const chunkNodeIds = graph.nodes.filter((n) => n.chunkSource).map((n) => n.id);
+  const reachable = new Set<string>([...validRoots, ...chunkNodeIds]);
+  const stack: string[] = [...reachable];
   while (stack.length > 0) {
     const current = stack.pop() as string;
     for (const edge of graph.edges) {
@@ -541,6 +563,7 @@ function dispatchGraph(
         state.emittedLines.count++;
         state.sink.emit(line);
       },
+      prelude: state.sink.prelude,
       diag: state.sink.diag,
       input,
     };

@@ -11,6 +11,7 @@ function mockCtx(): EmitContext {
     input: vi.fn(() => '0.0'),
     uniform: vi.fn((spec) => spec.name),
     emit: vi.fn(),
+    prelude: vi.fn(),
     diag: vi.fn(),
   };
 }
@@ -32,7 +33,7 @@ describe('chunk.raw node definition', () => {
     expect(chunkRaw.outputs).toEqual([]);
   });
 
-  it('emits the raw chunkSource text verbatim, byte-for-byte, and nothing else', () => {
+  it('emits the raw chunkSource text verbatim, byte-for-byte, to the prelude (not the body), and nothing else', () => {
     const rawText = [
       'uniform float uWarp;',
       'float sg_terrain(vec3 p) {',
@@ -44,8 +45,9 @@ describe('chunk.raw node definition', () => {
 
     const result = chunkRaw.emit['glsl-es']!(node, ctx);
 
-    expect(ctx.emit).toHaveBeenCalledTimes(1);
-    expect(ctx.emit).toHaveBeenCalledWith(rawText);
+    expect(ctx.prelude).toHaveBeenCalledTimes(1);
+    expect(ctx.prelude).toHaveBeenCalledWith(rawText);
+    expect(ctx.emit).not.toHaveBeenCalled();
     expect(ctx.uniform).not.toHaveBeenCalled();
     expect(ctx.diag).not.toHaveBeenCalled();
     expect(result).toBe('');
@@ -58,6 +60,7 @@ describe('chunk.raw node definition', () => {
     chunkRaw.emit['glsl-es']!(node, ctx);
 
     expect(ctx.emit).not.toHaveBeenCalled();
+    expect(ctx.prelude).not.toHaveBeenCalled();
     expect(ctx.diag).toHaveBeenCalledTimes(1);
     expect((ctx.diag as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
       level: 'error',

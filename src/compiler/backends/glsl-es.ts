@@ -330,10 +330,22 @@ function wrapForPreview(expr: string, type: SocketType, diag: (d: Diagnostic) =>
   }
 }
 
-function assembleFragment(uniformDecls: string[], body: string[]): string {
+/** Builds the fixed portion of the fragment header ahead of `void main() {`:
+ *  precision/varying, deduped uniform declarations, the shared function
+ *  library, then every node-contributed `EmitContext.prelude` text (e.g. a
+ *  `chunk.raw` node's imported `uniform`/function declarations — see
+ *  `src/nodes/definitions/chunk.ts`) in dispatch order. Shared by
+ *  `assembleFragment` and `headerLineCount` so the two can never drift. */
+function buildHeaderLines(uniformDecls: string[], preludes: string[]): string[] {
   const lines: string[] = ['precision highp float;', 'varying vec2 vUv;', ...uniformDecls, ''];
   lines.push(GLSL_PRELUDE, '');
+  for (const p of preludes) lines.push(p, '');
   lines.push('void main() {');
+  return lines;
+}
+
+function assembleFragment(uniformDecls: string[], body: string[], preludes: string[] = []): string {
+  const lines = buildHeaderLines(uniformDecls, preludes);
   for (const line of body) lines.push(`  ${line}`);
   lines.push('}');
   return lines.join('\n');
@@ -346,9 +358,8 @@ function assembleFragment(uniformDecls: string[], body: string[]): string {
  *  line for `CompiledProgram.sourceMap` (code-panel click-to-source). Derived
  *  the same way `assembleFragment` builds its header, rather than duplicating
  *  a hand-counted constant, so it can never drift from the real prelude. */
-function headerLineCount(uniformDecls: string[]): number {
-  const header = ['precision highp float;', 'varying vec2 vUv;', ...uniformDecls, '', GLSL_PRELUDE, '', 'void main() {'];
-  return header.join('\n').split('\n').length;
+function headerLineCount(uniformDecls: string[], preludes: string[] = []): number {
+  return buildHeaderLines(uniformDecls, preludes).join('\n').split('\n').length;
 }
 
 /** Compiles a single graph (one layer, or a per-node/per-layer preview slice)
@@ -377,8 +388,8 @@ function compileGraph(
   }
 
   const uniformDecls = handle.uniforms.map((u) => `uniform ${typeName(u.type)} ${u.name};`);
-  const fragment = assembleFragment(uniformDecls, handle.body);
-  const offset = headerLineCount(uniformDecls);
+  const fragment = assembleFragment(uniformDecls, handle.body, handle.preludes);
+  const offset = headerLineCount(uniformDecls, handle.preludes);
   const sourceMap = result.sourceMap.map(({ line, nodeId }) => ({ line: offset + line + 1, nodeId }));
 
   return {
@@ -510,8 +521,8 @@ function compileDocument(
   handle.sink.emit(`gl_FragColor = vec4(${compositeVar}, 1.0);`);
 
   const uniformDecls = handle.uniforms.map((u) => `uniform ${typeName(u.type)} ${u.name};`);
-  const fragment = assembleFragment(uniformDecls, handle.body);
-  const offset = headerLineCount(uniformDecls);
+  const fragment = assembleFragment(uniformDecls, handle.body, handle.preludes);
+  const offset = headerLineCount(uniformDecls, handle.preludes);
   const sourceMap = relativeSourceMap.map(({ line, nodeId }) => ({ line: offset + line + 1, nodeId }));
 
   return {

@@ -63,6 +63,14 @@ export interface EmitContext {
   uniform(spec: UniformSpec): string;
   /** Append a statement to the current function body. */
   emit(line: string): void;
+  /** Append TOP-LEVEL source (outside any function body) once per exact-text
+   *  value, deduped verbatim and independent of dispatch order — the
+   *  injection point a node needs when it contributes source that cannot
+   *  live inside the composed `main()` (e.g. `chunk.raw`'s imported
+   *  `uniform`/function declarations; see `src/nodes/definitions/chunk.ts`).
+   *  Rendered by the backend ahead of `main()`, after its own shared
+   *  function-library prelude. */
+  prelude(text: string): void;
   diag(d: Diagnostic): void;
   target: TargetLang;
 }
