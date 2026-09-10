@@ -25,7 +25,7 @@ Swap the graph view later (canvas/litegraph) without touching model, compiler, o
 - Type-check sockets. Reject illegal links at connect time (`SOCKET_COMPATIBILITY` in `src/model/document.ts`).
 - JSON round-trip the document losslessly.
 - `pnpm` scripts: `dev` (Vite :5180), `test`, `typecheck`.
-- Current build target: **Phase 1 — Graph MVP** (React Flow wired to zustand store; add/connect/delete typed nodes; starter set `input.uv`, `math.mix/add/mul`, `noise.fbm`, `color.ramp`, `output.surface`; inspector; save/load JSON). Do not skip ahead to Legion adapter or WGSL backends unless the task says so.
+- Current build target: **Phase 6 — Pivot shell** (pivot the UI shell; real layer groups; floating inspector; node gallery). Do not skip ahead to Legion adapter or WGSL backends unless the task says so.
 
 ## Do not
 
