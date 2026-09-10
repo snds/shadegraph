@@ -49,6 +49,7 @@ import { findSubGraph, isSubGraphInstanceNode } from '../../model/subgraph';
 import { nodes } from '../../nodes/registry';
 import { activeGraph, activeGraphKind, useEditorStore, type LayerPatch } from '../store';
 import { BLEND_MODES, BLEND_MODE_LABELS, isBlendMode } from '../layers/blendModes';
+import { Icon } from '../shell/Icon';
 import { collectExposedParams, describeDocument, type BlackboardEntry } from './blackboard';
 import { formatParamValue } from './paramValues';
 import { ParamControl } from './ParamControl';
@@ -57,6 +58,12 @@ import './inspector.css';
 const titleOf = (type: string) => nodes.get(type)?.title;
 
 export function Inspector() {
+  // Plain in-memory state, not persisted across reload — same precedent as
+  // `PivotRail`'s own collapse toggle (`collapsed` lives in `Shell.tsx` via
+  // `useState`, no settings slot). See the "Inspector: collapsible" task
+  // note for why this doesn't reach for `ProjectSettings`.
+  const [collapsed, setCollapsed] = useState(false);
+
   const doc = useEditorStore((s) => s.doc);
   const selectedNodeIds = useEditorStore((s) => s.selectedNodeIds);
   const selectedLayerIds = useEditorStore((s) => s.selectedLayerIds);
@@ -80,9 +87,43 @@ export function Inspector() {
       ? findStackNode(doc.layerStack.layers, selectedLayerIds[0])
       : undefined;
 
+  // Collapsed: a minimal icon-only strip, floating/right-anchored the same
+  // way the expanded panel is (`.sg-inspector--collapsed` in `../app.css`
+  // just strips the width/padding that make the expanded panel hug its
+  // content) — no selection content renders while collapsed, so expanding
+  // always restores the exact content-hugging behavior above unchanged.
+  if (collapsed) {
+    return (
+      <aside className="sg-inspector sg-inspector--collapsed" aria-label="Inspector">
+        <button
+          type="button"
+          className="sg-inspector__collapse"
+          onClick={() => setCollapsed(false)}
+          aria-expanded={false}
+          aria-label="Expand inspector"
+          title="Expand inspector"
+        >
+          <Icon name="chevron_left" />
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="sg-inspector" aria-label="Inspector">
-      <h2 className="sg-pane__title">Inspector</h2>
+      <div className="sg-inspector__titlebar">
+        <h2 className="sg-pane__title">Inspector</h2>
+        <button
+          type="button"
+          className="sg-inspector__collapse"
+          onClick={() => setCollapsed(true)}
+          aria-expanded={true}
+          aria-label="Collapse inspector"
+          title="Collapse inspector"
+        >
+          <Icon name="chevron_right" />
+        </button>
+      </div>
 
       {selectedNodeIds.length > 1 ? (
         <p className="sg-pane__empty">{selectedNodeIds.length} nodes selected.</p>

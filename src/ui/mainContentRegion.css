@@ -25,10 +25,45 @@
   min-height: 0;
 }
 
-/* `.sg-viewer` keeps its fixed `height: 120px` from `app.css`; pinning
-   `flex: none` here just guards against the column shrinking it. */
+/* `.sg-viewer`'s height is driven by `--sg-preview-size` (set inline by
+   `MainContentRegion.tsx`, live during a divider drag) rather than the fixed
+   `height: 120px` `app.css` used to carry — that rule only ever applied here
+   (this is `.sg-viewer`'s one render site), so it moved rather than being
+   overridden. `flex: none` guards against the column stretching/shrinking it
+   independently of that height. */
 .sg-main-region > .sg-viewer {
   flex: none;
+  height: var(--sg-preview-size, 120px);
+}
+
+/* Draggable split between `.sg-graph`/`.sg-viewer`. A thin fixed-height bar
+   (not a percentage split) so it never eats into either pane's own sizing —
+   `.sg-graph` keeps flexing to fill whatever the divider leaves it, `.sg-viewer`
+   keeps the explicit height above. `touch-action: none` stops the browser's
+   own scroll/pan gesture from competing with the drag on touch input. */
+.sg-main-region__divider {
+  flex: none;
+  height: 6px;
+  margin: -3px 0;
+  position: relative;
+  z-index: 4;
+  cursor: row-resize;
+  touch-action: none;
+  background: transparent;
+}
+.sg-main-region__divider::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 2px;
+  background: var(--sg-line);
+  border-radius: 1px;
+}
+.sg-main-region__divider:hover::after,
+.sg-main-region__divider:active::after {
+  background: var(--sg-accent);
 }
 
 .sg-main-region__dock-toggle {

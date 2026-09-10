@@ -9,6 +9,25 @@
   text-transform: uppercase; letter-spacing: 0.06em; color: var(--sg-dim);
 }
 
+/* ── Collapse toggle — mirrors `PivotRail.tsx`'s `.sg-rail__collapse`
+   (shell.css) for the same visual pattern, chevron direction flipped since
+   this panel is right-anchored instead of left-anchored. `.sg-inspector--
+   collapsed` (the icon-only strip state) lives in `../app.css` alongside the
+   `.sg-inspector` positioning rule it overrides. ─────────────────────────── */
+.sg-inspector__titlebar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.sg-inspector__titlebar .sg-pane__title { margin: 0; }
+
+.sg-inspector__collapse {
+  flex: none;
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  background: transparent; border: 0; border-radius: 4px;
+  color: var(--sg-dim); cursor: pointer;
+}
+.sg-inspector__collapse:hover { color: var(--sg-text); background: var(--sg-raised); }
+
+.sg-inspector--collapsed .sg-inspector__collapse { width: 28px; height: 28px; }
+
 /* ── Shared field chrome (fields.tsx) ────────────────────────────────────── */
 .sg-field {
   font: inherit; color: var(--sg-text); background: var(--sg-raised);

@@ -78,6 +78,12 @@ export interface ProjectSettings {
   referenceCritique?: ReferenceCritiqueConfig;
   performanceBudget?: PerformanceBudgetConfig;
   previewDockPosition?: PreviewDockPosition;
+  /** The main preview's (`MainViewer`) size in px, along the axis its
+   *  draggable divider with the node graph (`GraphCanvas`) resizes.
+   *  Independent of `previewDockPosition` — which pane the size belongs to
+   *  stays fixed, only which side it docks to changes. `undefined` falls
+   *  back to `MainContentRegion.tsx`'s own default. */
+  previewSize?: number;
 }
 
 /** The settings equivalent of `emptyDocument()` — every field genuinely
@@ -167,6 +173,12 @@ function readPreviewDockPosition(value: unknown): PreviewDockPosition | undefine
   return value === 'top' || value === 'bottom' ? value : undefined;
 }
 
+/** Positive finite px size only — zero/negative/`NaN`/non-numeric all fall
+ *  back to `MainContentRegion.tsx`'s default rather than collapsing a pane. */
+function readPreviewSize(value: unknown): number | undefined {
+  return isFiniteNumber(value) && value > 0 ? value : undefined;
+}
+
 /**
  * Untrusted JSON text → a best-effort `ProjectSettings`. Never throws and
  * never reports *why* a sub-field was dropped (that could mean echoing a
@@ -189,6 +201,8 @@ export function parseSettingsText(text: string): ProjectSettings {
   if (performanceBudget) settings.performanceBudget = performanceBudget;
   const previewDockPosition = readPreviewDockPosition(parsed.previewDockPosition);
   if (previewDockPosition) settings.previewDockPosition = previewDockPosition;
+  const previewSize = readPreviewSize(parsed.previewSize);
+  if (previewSize !== undefined) settings.previewSize = previewSize;
   return settings;
 }
 

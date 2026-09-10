@@ -83,6 +83,16 @@ describe('save/load round-trip', () => {
     expect(loadSettings(storage)).toEqual(settings);
   });
 
+  it('round-trips previewSize alongside other fields', () => {
+    const storage = memoryStorage();
+    const settings: ProjectSettings = {
+      previewDockPosition: 'bottom',
+      previewSize: 240,
+    };
+    saveSettings(settings, storage);
+    expect(loadSettings(storage)).toEqual(settings);
+  });
+
   it('loadSettings returns emptySettings() when nothing is stored', () => {
     const storage = memoryStorage();
     expect(loadSettings(storage)).toEqual(emptySettings());
@@ -159,6 +169,17 @@ describe('parseSettingsText', () => {
     expect(parseSettingsText(JSON.stringify({ previewDockPosition: 'bottom' })).previewDockPosition).toBe(
       'bottom',
     );
+  });
+
+  it('drops a non-positive or non-numeric previewSize value', () => {
+    expect(parseSettingsText(JSON.stringify({ previewSize: 0 })).previewSize).toBeUndefined();
+    expect(parseSettingsText(JSON.stringify({ previewSize: -40 })).previewSize).toBeUndefined();
+    expect(parseSettingsText(JSON.stringify({ previewSize: 'big' })).previewSize).toBeUndefined();
+    expect(parseSettingsText(JSON.stringify({ previewSize: NaN })).previewSize).toBeUndefined();
+  });
+
+  it('accepts a positive previewSize value', () => {
+    expect(parseSettingsText(JSON.stringify({ previewSize: 240 })).previewSize).toBe(240);
   });
 
   it('never throws on unexpected input shapes', () => {
