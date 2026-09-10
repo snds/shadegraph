@@ -597,6 +597,32 @@ describe('glslEsBackend.compileDocument', () => {
       .find((line) => line.includes('= sg_blendMultiply('));
     expect(blendLine).toContain(`, ${overlayOpacityName});`);
   });
+
+  it("golden snapshot: a group's own maskGraph multiplies into ITS blend call site, masking its already-folded composite (not any one child)", () => {
+    const group: LayerGroup = {
+      kind: 'group',
+      id: 'grp_masked',
+      name: 'Masked group',
+      blend: 'multiply',
+      opacity: 0.5,
+      enabled: true,
+      visible: true,
+      children: [emptyLayer('A'), emptyLayer('B')],
+      maskGraph: uvFbmMaskGraph(),
+    };
+    const doc = emptyDocument('Group mask');
+    doc.layerStack.layers = [group];
+    const groupOpacityName = layerOpacityUniformName(group.id);
+
+    const program = glslEsBackend.compileDocument(doc);
+    expect(program.diagnostics).toEqual([]);
+    const fragment = program.fragment ?? '';
+
+    expect(fragment).toMatch(/sg_fbm\(/);
+    expect(fragment).toMatch(/float mask_\d+ = clamp\(fbm_\d+, 0\.0, 1\.0\);/);
+    const blendLine = fragment.split('\n').find((line) => line.includes('= sg_blendMultiply('));
+    expect(blendLine).toMatch(new RegExp(`\\(${groupOpacityName} \\* mask_\\d+\\)`));
+  });
 });
 
 // End-to-end proof that `subGraphs` actually reaches `lowerGraph` through

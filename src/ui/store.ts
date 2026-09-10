@@ -46,6 +46,7 @@ import {
   flattenLayers,
   insertStackNode,
   isGroupNode,
+  isLayerNode,
   moveStackNode as moveStackNodeInTree,
   replaceSiblingArray,
   subtreeIds,
@@ -97,18 +98,32 @@ export type EditingTarget =
   | { kind: 'mask'; layerId: string }
   | { kind: 'subgraph'; subGraphId: string };
 
-/** Whether the canvas is currently showing the active layer's mask graph, a
- *  subgraph's own graph, or the active layer's main graph. The one place
- *  that decides this, so `activeGraph`, `withActiveGraph` and the UI
- *  (breadcrumb, layer-stack mask control) can never disagree. */
+/** The `StackNode` (leaf layer OR group) a `{ kind: 'mask' }` target names,
+ *  if it still resolves AND still has a `maskGraph` — the shared "is this
+ *  mask target still valid" check `activeGraphKind`/`activeGraph`/
+ *  `withActiveGraph` all defer to, so mask editing works identically whether
+ *  `layerId` names a leaf `ShaderLayer` or a `LayerGroup` (both carry an
+ *  optional `maskGraph`, see `document.ts`). Deliberately NOT tied to
+ *  `activeLayerId` — a group can never be "the active layer" (it has no main
+ *  `graph` of its own), so mask editing must resolve independently of it. */
+function maskEditingNode(
+  doc: ShaderDocument,
+  editingTarget: EditingTarget,
+): (ShaderLayer | LayerGroup) | undefined {
+  if (editingTarget.kind !== 'mask') return undefined;
+  const node = findStackNode(doc.layerStack.layers, editingTarget.layerId);
+  return node?.maskGraph ? node : undefined;
+}
+
+/** Whether the canvas is currently showing a mask graph, a subgraph's own
+ *  graph, or the active layer's main graph. The one place that decides this,
+ *  so `activeGraph`, `withActiveGraph` and the UI (breadcrumb, layer-stack
+ *  mask control) can never disagree. */
 export function activeGraphKind(doc: ShaderDocument, editingTarget: EditingTarget): 'layer' | 'mask' | 'subgraph' {
   if (editingTarget.kind === 'subgraph') {
     return doc.subGraphs.some((sg) => sg.id === editingTarget.subGraphId) ? 'subgraph' : 'layer';
   }
-  const layer = activeLayer(doc);
-  return editingTarget.kind === 'mask' && editingTarget.layerId === layer.id && !!layer.maskGraph
-    ? 'mask'
-    : 'layer';
+  return maskEditingNode(doc, editingTarget) ? 'mask' : 'layer';
 }
 
 /** The graph currently being edited: the active layer's main graph, unless
@@ -128,8 +143,9 @@ export function activeGraph(
     const subGraph = doc.subGraphs.find((sg) => sg.id === editingTarget.subGraphId);
     if (subGraph) return subGraph.graph;
   }
-  const layer = activeLayer(doc);
-  return activeGraphKind(doc, editingTarget) === 'mask' ? (layer.maskGraph as ShaderGraph) : layer.graph;
+  const maskNode = maskEditingNode(doc, editingTarget);
+  if (maskNode) return maskNode.maskGraph as ShaderGraph;
+  return activeLayer(doc).graph;
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────
@@ -145,9 +161,9 @@ function touch(doc: ShaderDocument): ShaderDocument {
 
 /** Replace the currently EDITED graph immutably — a `SubGraph`'s own `graph`
  *  while `editingTarget` names one (mutating `doc.subGraphs`, never
- *  `layerStack`), the active layer's `maskGraph` while it names that instead
- *  (per `activeGraphKind`), otherwise its main `graph`. `fn` returns `null`
- *  to abort. */
+ *  `layerStack`), a leaf layer's OR group's `maskGraph` while it names that
+ *  instead (per `maskEditingNode`/`activeGraphKind`), otherwise the active
+ *  layer's main `graph`. `fn` returns `null` to abort. */
 function withActiveGraph(
   doc: ShaderDocument,
   editingTarget: EditingTarget,
@@ -166,15 +182,14 @@ function withActiveGraph(
     // Unknown subGraphId (e.g. self-healing from a stale target) — fall
     // through to the layer/mask path exactly like `activeGraphKind` would.
   }
-  const id = activeLayerId(doc);
-  const layer = findLayer(doc.layerStack.layers, id);
-  if (!layer) return null;
-  const editingMask = activeGraphKind(doc, editingTarget) === 'mask';
-  const currentGraph = editingMask ? (layer.maskGraph as ShaderGraph) : layer.graph;
+  const maskNode = maskEditingNode(doc, editingTarget);
+  const id = maskNode ? maskNode.id : activeLayerId(doc);
+  const currentGraph = maskNode ? (maskNode.maskGraph as ShaderGraph) : activeLayer(doc).graph;
+  if (!maskNode && !findLayer(doc.layerStack.layers, id)) return null;
   const nextGraph = fn(currentGraph);
   if (!nextGraph || nextGraph === currentGraph) return null;
   const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (node) =>
-    editingMask ? { ...(node as ShaderLayer), maskGraph: nextGraph } : { ...(node as ShaderLayer), graph: nextGraph },
+    maskNode ? { ...node, maskGraph: nextGraph } : { ...(node as ShaderLayer), graph: nextGraph },
   );
   return touch({ ...doc, layerStack: { ...doc.layerStack, layers } });
 }
@@ -842,11 +857,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       fallback = fallback ?? firstLayerId(nextLayers);
     }
     const editingTarget = get().editingTarget;
-    // A mask target pointing at a layer inside the removed subtree is now
-    // meaningless even if that layer was not the active one (shouldn't
-    // normally happen, since entering mask editing also activates its layer,
-    // but stay defensive).
-    const staleTarget = wasActive || (editingTarget.kind === 'mask' && removedLeafIds.has(editingTarget.layerId));
+    // A mask target pointing at a layer OR GROUP inside the removed subtree
+    // (`removedIds`, not the leaf-only `removedLeafIds` — a group's own
+    // `maskGraph` can be the thing being edited) is now meaningless even if
+    // that node was not the active leaf layer (shouldn't normally happen for
+    // a leaf, since entering mask editing also activates its layer, but stay
+    // defensive; a group is never "active" at all, so this is the ONLY check
+    // that catches removing a group mid-edit of its mask).
+    const staleTarget = wasActive || (editingTarget.kind === 'mask' && removedIds.has(editingTarget.layerId));
     set({
       doc: touch({
         ...doc,
@@ -980,24 +998,33 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   addMaskToLayer(id) {
     const doc = get().doc;
-    const layer = findLayer(doc.layerStack.layers, id);
-    if (!layer) {
+    // Resolves a leaf `ShaderLayer` OR a `LayerGroup` (`findStackNode`, not
+    // the leaf-only `findLayer`) — both carry an optional `maskGraph`
+    // (`document.ts`), and the Inspector's "+ mask" control targets either.
+    const node = findStackNode(doc.layerStack.layers, id);
+    if (!node) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
-    if (layer.maskGraph) {
+    if (node.maskGraph) {
       // Already has one — treat as "go edit it" rather than an error.
       get().enterMaskEditing(id);
       return;
     }
-    const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (node) => ({
-      ...node,
+    const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (n) => ({
+      ...n,
       maskGraph: emptyMaskGraph(),
     }));
     set({
       doc: touch({
         ...doc,
-        layerStack: { ...doc.layerStack, layers, activeLayerId: id },
+        layerStack: {
+          ...doc.layerStack,
+          layers,
+          // A group can never be "the active layer" (`activeLayerId`'s own
+          // contract) — only steer it there for a leaf layer.
+          activeLayerId: isLayerNode(node) ? id : doc.layerStack.activeLayerId,
+        },
       }),
       editingTarget: { kind: 'mask', layerId: id },
       selectedNodeIds: [],
@@ -1007,14 +1034,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   removeMaskFromLayer(id) {
     const doc = get().doc;
-    const layer = findLayer(doc.layerStack.layers, id);
-    if (!layer) {
+    const node = findStackNode(doc.layerStack.layers, id);
+    if (!node) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
-    if (!layer.maskGraph) return;
-    const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (node) => {
-      const { maskGraph: _removed, ...withoutMask } = node;
+    if (!node.maskGraph) return;
+    const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (n) => {
+      const { maskGraph: _removed, ...withoutMask } = n;
       return withoutMask as StackNode;
     });
     const editingTarget = get().editingTarget;
@@ -1029,16 +1056,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   enterMaskEditing(layerId) {
     const doc = get().doc;
-    const layer = findLayer(doc.layerStack.layers, layerId);
-    if (!layer) {
+    const node = findStackNode(doc.layerStack.layers, layerId);
+    if (!node) {
       set({ lastError: `No layer "${layerId}".` });
       return;
     }
-    if (!layer.maskGraph) {
-      set({ lastError: `Layer "${layer.name}" has no mask yet.` });
+    if (!node.maskGraph) {
+      set({ lastError: `Layer "${node.name}" has no mask yet.` });
       return;
     }
-    const alreadyActive = activeLayerId(doc) === layerId;
+    // Only a leaf layer can be "the active layer" — entering a group's mask
+    // leaves `activeLayerId` (and therefore the main-graph canvas beneath the
+    // mask breadcrumb) exactly as it was.
+    const alreadyActive = !isLayerNode(node) || activeLayerId(doc) === layerId;
     set({
       doc: alreadyActive
         ? doc

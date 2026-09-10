@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { LayerGroup } from '../model/document';
-import { findLayer } from '../model/layerTree';
+import { findLayer, findStackNode } from '../model/layerTree';
 import { deserialize, serialize } from '../model/serialize';
 import { nodes, type NodeDefinition } from '../nodes/registry';
-import { activeGraph, activeLayer, useEditorStore } from './store';
+import { activeGraph, activeLayer, activeLayerId, useEditorStore } from './store';
 
 // Purpose-built definitions rather than the starter set: these tests are about
 // the STORE's use of the registry, so the socket types under test must stay
@@ -731,6 +731,74 @@ describe('masks', () => {
     store().addMaskToLayer(base);
 
     store().setActiveLayer(second);
+
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+  });
+
+  // A `LayerGroup` carries its own optional `maskGraph` field (`document.ts`)
+  // exactly like a leaf `ShaderLayer`, masking its already-folded composite
+  // (`foldStack` in both compiler backends). `addMaskToLayer`/
+  // `removeMaskFromLayer`/`enterMaskEditing`/`exitMaskEditing` must resolve a
+  // group id (`findStackNode`) just like a leaf id, not silently fail
+  // (`lastError: 'No layer "id".'`) because `findLayer` only ever matches a
+  // leaf.
+  it('adds a mask to a GROUP and switches the canvas into editing it, same as a leaf layer', () => {
+    const activeBefore = activeLayerId(store().doc);
+    const groupId = store().addGroup('Backdrop') as string;
+    expect(groupId).not.toBeNull();
+
+    store().addMaskToLayer(groupId);
+
+    const group = findStackNode(store().doc.layerStack.layers, groupId) as LayerGroup;
+    expect(group.maskGraph?.nodes.map((n) => n.type)).toEqual(['output.mask']);
+    expect(store().editingTarget).toEqual({ kind: 'mask', layerId: groupId });
+    expect(activeGraph(store().doc)).toBe(group.maskGraph);
+    // A group can never be "the active layer" — adding its mask must not
+    // steer `activeLayerId` at a node with no main `graph` of its own.
+    expect(activeLayerId(store().doc)).toBe(activeBefore);
+  });
+
+  it('routes graph mutations to a group mask while editing it, leaving sibling layers untouched', () => {
+    const groupId = store().addGroup('Backdrop') as string;
+    store().addMaskToLayer(groupId);
+
+    const maskNode = add('test.uv');
+
+    const group = findStackNode(store().doc.layerStack.layers, groupId) as LayerGroup;
+    expect(group.maskGraph?.nodes.map((n) => n.id)).toContain(maskNode);
+    expect(activeLayer(store().doc).graph.nodes.map((n) => n.id)).not.toContain(maskNode);
+  });
+
+  it('re-enters and exits an existing group mask via enterMaskEditing/exitMaskEditing', () => {
+    const groupId = store().addGroup('Backdrop') as string;
+    store().addMaskToLayer(groupId);
+    store().exitMaskEditing();
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+
+    store().enterMaskEditing(groupId);
+
+    expect(store().editingTarget).toEqual({ kind: 'mask', layerId: groupId });
+    const group = findStackNode(store().doc.layerStack.layers, groupId) as LayerGroup;
+    expect(activeGraph(store().doc)).toBe(group.maskGraph);
+  });
+
+  it('removeMaskFromLayer on a group falls back to the main graph when it was being edited', () => {
+    const groupId = store().addGroup('Backdrop') as string;
+    store().addMaskToLayer(groupId);
+
+    store().removeMaskFromLayer(groupId);
+
+    const group = findStackNode(store().doc.layerStack.layers, groupId) as LayerGroup;
+    expect(group.maskGraph).toBeUndefined();
+    expect(store().editingTarget).toEqual({ kind: 'layer' });
+  });
+
+  it('removing a group mid-edit of its own mask exits mask editing (removeLayer stale-target cleanup)', () => {
+    const groupId = store().addGroup('Backdrop') as string;
+    store().addMaskToLayer(groupId);
+    expect(store().editingTarget).toEqual({ kind: 'mask', layerId: groupId });
+
+    store().removeLayer(groupId);
 
     expect(store().editingTarget).toEqual({ kind: 'layer' });
   });

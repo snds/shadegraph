@@ -5,43 +5,42 @@
    discipline as `settings.css`/`toolbar.css`/`layers.css`.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Anchoring parent for the popover — inline in `DocToolbar`'s action group,
+   not fixed to the viewport. */
+.sg-perf-dock { position: relative; display: inline-flex; }
+
 .sg-perf__toggle {
-  position: fixed;
-  /* Settings' own toggle sits at top:8px/right:12px (28px square) — offset
-     far enough right that the two never overlap regardless of font metrics. */
-  top: 8px;
-  right: 48px;
-  z-index: 40;
   width: 28px;
   height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--sg-radius);
   border: 1px solid var(--sg-line);
   background: var(--sg-panel);
   color: var(--sg-text);
   cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
 }
 .sg-perf__toggle:hover { border-color: var(--sg-accent); }
+.sg-perf__toggle[aria-expanded='true'] { border-color: var(--sg-accent); }
 
-.sg-perf__overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.35);
-}
-
-.sg-perf__dialog {
-  position: relative;
-  width: 360px;
-  max-width: 100%;
-  height: 100%;
+/* A toolbar-anchored dropdown (same convention as
+   `.sg-rail__profile-popover`) rather than a full-height overlay dialog. */
+.sg-perf__popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  z-index: 60;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: 70vh;
   overflow: auto;
   padding: 16px;
   background: var(--sg-panel);
-  border-left: 1px solid var(--sg-line);
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 .sg-perf__close {
@@ -50,6 +49,9 @@
   right: 10px;
   width: 24px;
   height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--sg-radius);
   border: 1px solid var(--sg-line);
   background: var(--sg-raised);

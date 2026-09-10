@@ -200,49 +200,51 @@ function LayerControlsPane({
           onToggle={() => patch({ soloed: !stackNode.soloed })}
         />
 
-        {isLeaf ? (
-          <>
+        {/* A group's `maskGraph` masks its already-folded composite exactly
+            like a leaf layer's masks its own graph (`document.ts`'s
+            `LayerGroup.maskGraph` doc comment, `foldStack` in both compiler
+            backends) — same control, same store actions, for either kind. */}
+        <>
+          <button
+            type="button"
+            className="sg-layerctl__mask"
+            data-on={hasMask}
+            data-editing={editingMask || undefined}
+            aria-pressed={editingMask}
+            aria-label={
+              !hasMask
+                ? `Add a mask to ${stackNode.name}`
+                : editingMask
+                  ? `Stop editing ${stackNode.name}'s mask`
+                  : `Edit ${stackNode.name}'s mask`
+            }
+            title={
+              !hasMask
+                ? `Add a mask (multiplies a grayscale graph result into this ${isGroup ? 'group' : 'layer'} per-pixel)`
+                : editingMask
+                  ? `Back to ${isLeaf ? "this layer's main graph" : 'the layer stack'}`
+                  : `Edit this ${isGroup ? 'group' : 'layer'}'s mask graph`
+            }
+            onClick={() => {
+              if (!hasMask) addMaskToLayer(stackNode.id);
+              else if (editingMask) exitMaskEditing();
+              else enterMaskEditing(stackNode.id);
+            }}
+          >
+            {hasMask ? 'mask' : '+ mask'}
+          </button>
+          {hasMask ? (
             <button
               type="button"
-              className="sg-layerctl__mask"
-              data-on={hasMask}
-              data-editing={editingMask || undefined}
-              aria-pressed={editingMask}
-              aria-label={
-                !hasMask
-                  ? `Add a mask to ${stackNode.name}`
-                  : editingMask
-                    ? `Stop editing ${stackNode.name}'s mask`
-                    : `Edit ${stackNode.name}'s mask`
-              }
-              title={
-                !hasMask
-                  ? 'Add a mask (multiplies a grayscale graph result into this layer per-pixel)'
-                  : editingMask
-                    ? "Back to this layer's main graph"
-                    : "Edit this layer's mask graph"
-              }
-              onClick={() => {
-                if (!hasMask) addMaskToLayer(stackNode.id);
-                else if (editingMask) exitMaskEditing();
-                else enterMaskEditing(stackNode.id);
-              }}
+              className="sg-layerctl__maskRemove"
+              onClick={() => removeMaskFromLayer(stackNode.id)}
+              aria-label={`Remove ${stackNode.name}'s mask`}
+              title={`Remove this ${isGroup ? 'group' : 'layer'}'s mask`}
             >
-              {hasMask ? 'mask' : '+ mask'}
+              ×
             </button>
-            {hasMask ? (
-              <button
-                type="button"
-                className="sg-layerctl__maskRemove"
-                onClick={() => removeMaskFromLayer(stackNode.id)}
-                aria-label={`Remove ${stackNode.name}'s mask`}
-                title="Remove this layer's mask"
-              >
-                ×
-              </button>
-            ) : null}
-          </>
-        ) : null}
+          ) : null}
+        </>
       </div>
 
       <div className="sg-layerctl__row sg-layerctl__row--mix">

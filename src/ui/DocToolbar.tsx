@@ -13,12 +13,18 @@
 // Boot wiring (autosave subscription + restore) is triggered from HERE, not
 // from App.tsx, so this task owns one file end to end. Both calls are
 // idempotent, so StrictMode's double-invoked effects are harmless.
+//
+// `PerfRoot` (the performance-budget popover) is mounted here, in the action
+// group, rather than as a fixed-position sibling of `<App />` — it's a
+// props-free, self-contained control, so dropping it in doesn't change this
+// file's own props-free/single-root contract.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useEffect, useRef, useState } from 'react';
 
 import type { TargetLang } from '../compiler/backend';
 import { notify } from './notice';
+import { PerfRoot } from './perf/PerfRoot';
 import {
   clearAutosave,
   documentFileName,
@@ -168,6 +174,7 @@ export function DocToolbar() {
 
       <span className="sg-toolbar-actions">
         {status && <span className="sg-hint sg-status">{status}</span>}
+        <PerfRoot />
         <button type="button" className="sg-btn" onClick={handleNew}>
           New
         </button>

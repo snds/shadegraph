@@ -54,6 +54,7 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import { validateConnection } from '../../model/connect';
+import { findStackNode } from '../../model/layerTree';
 import { activeGraph, activeGraphKind, activeLayer, activeLayerId, useEditorStore } from '../store';
 import { notify } from '../notice';
 import { AddNodePalette } from './AddNodePalette';
@@ -149,6 +150,14 @@ function GraphCanvasInner() {
   const layerId = activeLayerId(doc);
   const viewingMask = activeGraphKind(doc, editingTarget) === 'mask';
   const layer = activeLayer(doc);
+  // The breadcrumb's parent label while viewing a mask: the mask's OWN
+  // layer/group (`editingTarget.layerId` — a group id never resolves via
+  // `activeLayer`, which only ever names a leaf), falling back to the active
+  // leaf layer's name for the ordinary "masking the active layer" case.
+  const maskParentName = viewingMask
+    ? (editingTarget.kind === 'mask' ? findStackNode(doc.layerStack.layers, editingTarget.layerId)?.name : undefined) ??
+      layer.name
+    : layer.name;
   const activeSubGraph =
     editingTarget.kind === 'subgraph' ? doc.subGraphs.find((sg) => sg.id === editingTarget.subGraphId) : undefined;
   const lookup = useMemo(() => registrySocketLookup(graph, doc.subGraphs), [graph, doc.subGraphs]);
@@ -552,7 +561,7 @@ function GraphCanvasInner() {
         </Panel>
         {viewingMask ? (
           <Panel position="top-center">
-            <GraphBreadcrumb parentLabel={layer.name} currentLabel="Mask" onExit={exitMaskEditing} />
+            <GraphBreadcrumb parentLabel={maskParentName} currentLabel="Mask" onExit={exitMaskEditing} />
           </Panel>
         ) : activeSubGraph ? (
           <Panel position="top-center">
