@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { emptyDocument, type ShaderDocument, type ShaderGraph } from '../../model/document';
+import {
+  emptyDocument,
+  type LayerGroup,
+  type ShaderDocument,
+  type ShaderGraph,
+  type ShaderLayer,
+} from '../../model/document';
 import { emptyLayer } from '../../model/factory';
 import type { SocketTypeLookup } from '../../model/connect';
 import { SUBGRAPH_INSTANCE_NODE_TYPE, extractSubGraph } from '../../model/subgraph';
@@ -218,7 +224,7 @@ describe('glslEsBackend — chunk.raw fidelity (Phase 5 selective graphing)', ()
 
   it('round-trips through a full document compile unmodified (no Phase-5 branching in compileDocument)', () => {
     const doc = emptyDocument('Graphed chunk');
-    doc.layerStack.layers[0].graph = graphWithGraphedChunk();
+    (doc.layerStack.layers[0] as ShaderLayer).graph = graphWithGraphedChunk();
 
     const program = glslEsBackend.compileDocument(doc);
 
@@ -281,7 +287,7 @@ describe('glslEsBackend.compileDocument', () => {
   // like `previewLayerId`, bypassing compositing entirely.
   it('previewNodeId resolves the owning layer and isolates it, bypassing compositing', () => {
     const doc = twoLayerDoc();
-    doc.layerStack.layers[1].graph = uvFbmRampOutputGraph();
+    (doc.layerStack.layers[1] as ShaderLayer).graph = uvFbmRampOutputGraph();
     const program = glslEsBackend.compileDocument(doc, { previewNodeId: 'fbm1' });
     expect(program.diagnostics).toEqual([]);
     expect(program.fragment).not.toMatch(/= sg_blend\w+\(/);
@@ -299,7 +305,7 @@ describe('glslEsBackend.compileDocument', () => {
   // from each layer's own zero.
   it('sourceMap lines stay correct across multiple composited layers', () => {
     const doc = twoLayerDoc();
-    doc.layerStack.layers[1].graph = uvFbmRampOutputGraph();
+    (doc.layerStack.layers[1] as ShaderLayer).graph = uvFbmRampOutputGraph();
     const program = glslEsBackend.compileDocument(doc);
     const lines = (program.fragment ?? '').split('\n');
 
@@ -366,6 +372,119 @@ describe('glslEsBackend.compileDocument', () => {
     expect(programB.uniforms.find((u) => u.name === layerOpacityUniformName(b.layerStack.layers[1].id))?.default).toBe(
       0.9,
     );
+  });
+
+  describe('layer groups', () => {
+    // Same substitute-for-a-GPU-pixel-diff proof the subgraph-inlining test
+    // above uses ("identical compiled fragment text" — this backend is
+    // `headless: true` and there is no GPU/pixel harness in this test
+    // environment): a group whose OWN blend/opacity is the neutral wrapper
+    // ('normal', opacity 1) folds its children through the exact same
+    // `foldStack` recursion a flat sibling list would, so wrapping an ENTIRE
+    // top-level stack in one such group must reproduce every child statement
+    // byte-for-byte, then append exactly one extra, PROVABLY-a-no-op blend
+    // statement: `sg_blendNormal(base, vec4(local, 1.0), 1.0)` is
+    // `mix(base, local, 1.0)`, which is `local` regardless of `base` — an
+    // algebraic fact about `mix`, not something that needs a GPU to confirm.
+    // Only the `main()` BODY is compared (not the whole fragment): the header
+    // gains one extra `uniform float ...;` declaration for the group's own
+    // opacity dial, interleaved among the others by request order, which
+    // would otherwise perturb a naive whole-fragment substring/diff check
+    // without meaning anything semantically (declaration order never affects
+    // GLSL semantics).
+    function mainBody(fragment: string): string {
+      const start = fragment.indexOf('void main() {');
+      const end = fragment.lastIndexOf('}');
+      // Trim the trailing newline right before the closing brace so the body
+      // never ends in a dangling empty line — keeps `.split('\n').at(-1)`
+      // meaningful for both fragments.
+      return fragment.slice(start, end).replace(/\n$/, '');
+    }
+
+    it('a document with a top-level group composites its children identically to the equivalent ungrouped document', () => {
+      const flatDoc = twoLayerDoc();
+      const flatProgram = glslEsBackend.compileDocument(flatDoc);
+      expect(flatProgram.diagnostics).toEqual([]);
+      const flatBody = mainBody(flatProgram.fragment ?? '');
+
+      const groupedDoc = emptyDocument('Grouped');
+      const group: LayerGroup = {
+        kind: 'group',
+        id: 'grp_everything',
+        name: 'Everything',
+        blend: 'normal',
+        opacity: 1,
+        enabled: true,
+        visible: true,
+        children: flatDoc.layerStack.layers,
+      };
+      groupedDoc.layerStack.layers = [group];
+      const groupedProgram = glslEsBackend.compileDocument(groupedDoc);
+      expect(groupedProgram.diagnostics).toEqual([]);
+      const groupedBody = mainBody(groupedProgram.fragment ?? '');
+
+      // Every child statement the flat document emits is reproduced verbatim,
+      // in the same order, as a PREFIX of the grouped document's body. Some
+      // of those lines are themselves intermediate `gl_FragColor = ...;`
+      // writes (a per-layer `output.surface` emitter side effect, unrelated
+      // to grouping — present identically in both documents) — only the
+      // FINAL line (the actual composite write `compileDocument` appends
+      // after its fold loop) differs, since it names the last CHILD's temp
+      // var rather than the group's own wrapping temp var. Drop just that
+      // last line, by position, not by content.
+      const flatLines = flatBody.split('\n');
+      const flatBodyWithoutFinalFragColor = flatLines.slice(0, -1).join('\n');
+      expect(flatLines.at(-1)?.trim()).toMatch(/^gl_FragColor = vec4\(/);
+      expect(groupedBody.startsWith(flatBodyWithoutFinalFragColor)).toBe(true);
+
+      // What follows is exactly ONE extra statement: the group's own
+      // wrapping blend call, which is a PROVABLE no-op (`mix(x, y, 1.0)` is
+      // always `y`) — then `gl_FragColor` referencing ITS result.
+      const groupOpacityUniform = layerOpacityUniformName(group.id);
+      expect(groupedProgram.uniforms.map((u) => u.name)).toContain(groupOpacityUniform);
+      const extra = groupedBody.slice(flatBodyWithoutFinalFragColor.length);
+      const wrappingLine = extra
+        .split('\n')
+        .find((line) => line.includes('sg_blendNormal(vec3(0.0), (vec4(') && line.includes(groupOpacityUniform));
+      expect(wrappingLine).toBeDefined();
+      const wrappingVar = wrappingLine!.match(/vec3 (\w+) =/)![1];
+      expect(extra.trim().endsWith(`gl_FragColor = vec4(${wrappingVar}, 1.0);`)).toBe(true);
+    });
+
+    it('groups compose recursively: a nested group folds bottom-to-top before its own blend applies', () => {
+      const inner: LayerGroup = {
+        kind: 'group',
+        id: 'grp_inner',
+        name: 'Inner',
+        blend: 'multiply',
+        opacity: 0.6,
+        enabled: true,
+        visible: true,
+        children: [emptyLayer('B'), emptyLayer('C')],
+      };
+      const outer: LayerGroup = {
+        kind: 'group',
+        id: 'grp_outer',
+        name: 'Outer',
+        blend: 'normal',
+        opacity: 1,
+        enabled: true,
+        visible: true,
+        children: [emptyLayer('A'), inner],
+      };
+      const doc = emptyDocument('Nested');
+      doc.layerStack.layers = [outer];
+
+      const program = glslEsBackend.compileDocument(doc);
+      expect(program.diagnostics).toEqual([]);
+      const fragment = program.fragment ?? '';
+      // The inner group's own blend (multiply) call site must appear, proving
+      // recursion actually reached it, and its opacity uniform must exist.
+      expect(fragment).toMatch(/= sg_blendMultiply\(/);
+      expect(fragment).toContain(`uniform float ${layerOpacityUniformName(inner.id)};`);
+      expect(fragment).toContain(`uniform float ${layerOpacityUniformName(outer.id)};`);
+      expect(fragment.trim().endsWith('}')).toBe(true);
+    });
   });
 
   // A mask graph terminates at `output.mask` instead of `output.surface` and
@@ -490,11 +609,11 @@ describe('glslEsBackend.compileDocument — subgraph instances (end-to-end)', ()
     // Two single-layer documents sharing the same layer id, so only the
     // presence/absence of the subgraph instance can perturb the fragment.
     const plainDoc = emptyDocument('Plain');
-    plainDoc.layerStack.layers[0].graph = originalGraph;
+    (plainDoc.layerStack.layers[0] as ShaderLayer).graph = originalGraph;
 
     const instancedDoc = emptyDocument('Instanced');
     instancedDoc.layerStack.layers[0].id = plainDoc.layerStack.layers[0].id;
-    instancedDoc.layerStack.layers[0].graph = extraction.parentGraph;
+    (instancedDoc.layerStack.layers[0] as ShaderLayer).graph = extraction.parentGraph;
     instancedDoc.subGraphs = [extraction.subGraph];
 
     const plainProgram = glslEsBackend.compileDocument(plainDoc);

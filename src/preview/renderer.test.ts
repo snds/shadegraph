@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyDocument, type ShaderDocument } from '../model/document';
+import { emptyDocument, type ShaderDocument, type ShaderLayer } from '../model/document';
 import type { CompileOptions, CompiledProgram } from '../compiler/backend';
 import { layerOpacityUniformName } from './topology';
 import { PreviewRenderer, type GpuBinding } from './renderer';
+
+/** Every fixture document here is a bare `emptyDocument()` with no groups —
+ *  its sole top-level stack node is always a leaf. */
+function layer0(doc: ShaderDocument): ShaderLayer {
+  return doc.layerStack.layers[0] as ShaderLayer;
+}
 
 // ── Fakes ────────────────────────────────────────────────────────────────────
 // No canvas, no WebGL: `GpuBinding` is a plain spy object, and `compile` is
@@ -44,7 +50,7 @@ function fakeCompile(uniformNames: string[]) {
 
 function docWithFrequencyNode(): ShaderDocument {
   const doc = emptyDocument('Renderer fixture');
-  doc.layerStack.layers[0].graph.nodes.unshift({
+  layer0(doc).graph.nodes.unshift({
     id: 'fbm1',
     type: 'noise.fbm',
     position: { x: 0, y: 0 },
@@ -80,7 +86,7 @@ describe('PreviewRenderer — recompile vs. direct uniform write', () => {
     expect(compile).toHaveBeenCalledTimes(1);
 
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes[0].params[0].value = 9;
+    layer0(edited).graph.nodes[0].params[0].value = 9;
     renderer.setDocument(edited);
 
     // The whole point of this task: dragging a slider never recompiles.
@@ -118,7 +124,7 @@ describe('PreviewRenderer — recompile vs. direct uniform write', () => {
     expect(compile).toHaveBeenCalledTimes(1);
 
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes.push({
+    layer0(edited).graph.nodes.push({
       id: 'extra',
       type: 'math.add',
       position: { x: 0, y: 0 },
@@ -133,7 +139,7 @@ describe('PreviewRenderer — recompile vs. direct uniform write', () => {
   it('a value change with no live uniform (baked into source, e.g. `octaves`) forces a recompile', () => {
     const gpu = fakeGpu();
     const doc = docWithFrequencyNode();
-    doc.layerStack.layers[0].graph.nodes[0].params.push({
+    layer0(doc).graph.nodes[0].params.push({
       id: 'octaves',
       label: 'Octaves',
       type: 'int',
@@ -151,7 +157,7 @@ describe('PreviewRenderer — recompile vs. direct uniform write', () => {
     expect(compile).toHaveBeenCalledTimes(1);
 
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes[0].params[1].value = 6;
+    layer0(edited).graph.nodes[0].params[1].value = 6;
     renderer.setDocument(edited);
 
     expect(compile).toHaveBeenCalledTimes(2);
@@ -279,7 +285,7 @@ describe('PreviewRenderer — delegates to an injected ThumbnailHost', () => {
     expect(thumbnails.onDocumentCalls).toHaveLength(1);
 
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes[0].params[0].value = 9;
+    layer0(edited).graph.nodes[0].params[0].value = 9;
     renderer.setDocument(edited);
     expect(thumbnails.onDocumentCalls).toHaveLength(2);
     expect(thumbnails.onDocumentCalls[1].changed).toEqual(['fbm1']);

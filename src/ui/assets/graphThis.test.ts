@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyDocument } from '../../model/document';
+import { emptyDocument, type ShaderLayer } from '../../model/document';
 import { emptyManifest, type ProjectManifest } from '../../model/projectManifest';
 import { CHUNK_RAW_NODE_TYPE } from '../../nodes/definitions/chunk';
 import type { RecognizedShaderObject } from '../../storage/recognition';
@@ -27,7 +27,7 @@ describe('graphedChunkNames', () => {
 
   it('includes a chunk.raw node already in the active layer graph', () => {
     const doc = emptyDocument();
-    doc.layerStack.layers[0].graph.nodes.push({
+    (doc.layerStack.layers[0] as ShaderLayer).graph.nodes.push({
       id: 'chunk_1',
       type: CHUNK_RAW_NODE_TYPE,
       position: { x: 0, y: 0 },
@@ -130,9 +130,11 @@ describe('graphThis', () => {
           ...doc,
           layerStack: {
             ...doc.layerStack,
-            layers: doc.layerStack.layers.map((layer, i) =>
-              i === 0 ? { ...layer, graph: { ...layer.graph, nodes: [...layer.graph.nodes, node] } } : layer,
-            ),
+            layers: doc.layerStack.layers.map((layer, i) => {
+              if (i !== 0) return layer;
+              const base = layer as ShaderLayer;
+              return { ...base, graph: { ...base.graph, nodes: [...base.graph.nodes, node] } };
+            }),
           },
         };
         return node.id;
@@ -164,7 +166,7 @@ describe('graphThis', () => {
     // that already includes the just-added node, not a stale snapshot from
     // before `addPreparedNode` ran.
     expect(deps.setDiscoveredObjectDraft).toHaveBeenCalledWith('obj-1', getDoc());
-    expect(getDoc().layerStack.layers[0].graph.nodes.some((n) => n.id === result.nodeId)).toBe(true);
+    expect((getDoc().layerStack.layers[0] as ShaderLayer).graph.nodes.some((n) => n.id === result.nodeId)).toBe(true);
   });
 
   it('refuses on missing-requires WITHOUT touching the document or the manifest', () => {
@@ -184,7 +186,7 @@ describe('graphThis', () => {
 
   it('proceeds when the required chunk is already graphed elsewhere in the document', () => {
     const { deps, getDoc } = makeDeps();
-    getDoc().layerStack.layers[0].graph.nodes.push({
+    (getDoc().layerStack.layers[0] as ShaderLayer).graph.nodes.push({
       id: 'chunk_base',
       type: CHUNK_RAW_NODE_TYPE,
       position: { x: 0, y: 0 },

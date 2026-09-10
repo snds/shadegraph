@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptyDocument, type NodeParam, type ShaderDocument } from '../model/document';
+import { emptyDocument, type NodeParam, type ShaderDocument, type ShaderLayer } from '../model/document';
 import { applyVariantValues, generateVariants } from './variants';
 
+/** Every fixture document here is a bare `emptyDocument()` (or a variant of
+ *  one) with no groups — its sole top-level stack node is always a leaf. */
+function layer0(doc: ShaderDocument): ShaderLayer {
+  return doc.layerStack.layers[0] as ShaderLayer;
+}
+
 function withParam(doc: ShaderDocument, param: NodeParam): ShaderDocument {
-  const [layer] = doc.layerStack.layers;
+  const layer = layer0(doc);
   const [node] = layer.graph.nodes;
   return {
     ...doc,
@@ -33,14 +39,14 @@ describe('applyVariantValues', () => {
     doc = withParam(doc, exposedFloat('untouched', 5));
 
     const variant = applyVariantValues(doc, { seed: 42 });
-    const [node] = variant.layerStack.layers[0].graph.nodes;
+    const [node] = layer0(variant).graph.nodes;
 
     expect(node.params.find((p) => p.id === 'seed')?.value).toBe(42);
     expect(node.params.find((p) => p.id === 'untouched')?.value).toBe(5);
     // Structural sharing: the untouched param object itself is the same
     // reference, not just deep-equal.
     expect(node.params.find((p) => p.id === 'untouched')).toBe(
-      doc.layerStack.layers[0].graph.nodes[0].params.find((p) => p.id === 'untouched'),
+      layer0(doc).graph.nodes[0].params.find((p) => p.id === 'untouched'),
     );
   });
 
@@ -49,7 +55,7 @@ describe('applyVariantValues', () => {
     doc = withParam(doc, { id: 'hidden', label: 'hidden', type: 'float', value: 0, ui: 'slider', exposed: false });
 
     const variant = applyVariantValues(doc, { hidden: 99 });
-    expect(variant.layerStack.layers[0].graph.nodes[0].params[0].value).toBe(0);
+    expect(layer0(variant).graph.nodes[0].params[0].value).toBe(0);
   });
 
   it('ignores a non-numeric exposed param rather than corrupting its value', () => {
@@ -64,7 +70,7 @@ describe('applyVariantValues', () => {
     });
 
     const variant = applyVariantValues(doc, { tint: 0.5 });
-    expect(variant.layerStack.layers[0].graph.nodes[0].params[0].value).toEqual([1, 0, 0]);
+    expect(layer0(variant).graph.nodes[0].params[0].value).toEqual([1, 0, 0]);
   });
 
   it('varies a document-level (global) blackboard param', () => {
@@ -96,7 +102,7 @@ describe('generateVariants', () => {
     expect(variants.map((v) => v.values.seed)).toEqual([0, 2.5, 5, 7.5, 10]);
     variants.forEach((v, i) => {
       expect(v.index).toBe(i);
-      expect(v.document.layerStack.layers[0].graph.nodes[0].params[0].value).toBe(v.values.seed);
+      expect(layer0(v.document).graph.nodes[0].params[0].value).toBe(v.values.seed);
     });
   });
 

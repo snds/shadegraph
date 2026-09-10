@@ -24,6 +24,7 @@ import { captureMainViewerStill } from '../../critique/screenshot';
 import { parseTimestampSeconds } from '../../critique/timestamps';
 import type { CritiqueResult, StillImage } from '../../critique/types';
 import { createBrowserVideoFrameExtractorDeps, extractVideoStills } from '../../critique/videoFrames';
+import { Icon } from '../shell/Icon';
 import { useProjectSettings } from '../settings/useProjectSettings';
 import './critique.css';
 
@@ -59,7 +60,12 @@ function ReferencePicker({ selectedId, onSelect }: { selectedId: string | null; 
         <li key={node.id} style={{ paddingLeft: 4 + node.depth * 14 }}>
           {node.kind === 'folder' ? (
             <button type="button" className="sg-critique__disclosure" onClick={() => void toggleExpand(node.id)}>
-              {node.loadingChildren ? '…' : node.expanded ? '▾' : '▸'} {node.name}
+              {node.loadingChildren ? (
+                <Icon name="progress_activity" />
+              ) : (
+                <Icon name={node.expanded ? 'expand_more' : 'chevron_right'} />
+              )}{' '}
+              {node.name}
             </button>
           ) : (
             <button

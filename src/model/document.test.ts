@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SCHEMA_VERSION, emptyDocument } from './document';
+import { SCHEMA_VERSION, emptyDocument, type ShaderLayer } from './document';
 
 // Toolchain smoke test: proves vitest resolves + runs TypeScript out of `src`.
 // Deep model coverage (typed connection validation, JSON round-trip) belongs to
@@ -19,7 +19,7 @@ describe('emptyDocument', () => {
     const { layers } = emptyDocument().layerStack;
 
     expect(layers).toHaveLength(1);
-    const [base] = layers;
+    const [base] = layers as ShaderLayer[];
     expect(base.name).toBe('Base');
     expect(base.enabled).toBe(true);
 

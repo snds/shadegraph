@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   emptyDocument,
   SOCKET_COMPATIBILITY,
+  type LayerGroup,
   type ScalarOrVector,
   type ShaderDocument,
   type ShaderGraph,
+  type ShaderLayer,
   type SocketType,
 } from '../../model/document';
 import { emptyLayer } from '../../model/factory';
@@ -226,7 +228,7 @@ describe('wgslBackend.compileDocument', () => {
 
   it('previewNodeId resolves the owning layer and isolates it, bypassing compositing', () => {
     const doc = twoLayerDoc();
-    doc.layerStack.layers[1].graph = uvFbmRampOutputGraph();
+    (doc.layerStack.layers[1] as ShaderLayer).graph = uvFbmRampOutputGraph();
     const program = wgslBackend.compileDocument(doc, { previewNodeId: 'fbm1' });
     expect(program.diagnostics).toEqual([]);
     expect(program.module).not.toMatch(/= sg_blend\w+\(/);
@@ -241,13 +243,67 @@ describe('wgslBackend.compileDocument', () => {
 
   it('sourceMap lines stay correct across multiple composited layers', () => {
     const doc = twoLayerDoc();
-    doc.layerStack.layers[1].graph = uvFbmRampOutputGraph();
+    (doc.layerStack.layers[1] as ShaderLayer).graph = uvFbmRampOutputGraph();
     const program = wgslBackend.compileDocument(doc);
     const lines = (program.module ?? '').split('\n');
 
     const fbmEntry = program.sourceMap?.find((e) => e.nodeId === 'fbm1');
     expect(fbmEntry).toBeDefined();
     expect(lines[(fbmEntry as { line: number }).line - 1]).toMatch(/sg_fbm\(/);
+  });
+
+  describe('layer groups', () => {
+    // Same "compiled source is provably equivalent" substitute for a GPU
+    // pixel diff that `glsl-es.test.ts` uses for this same scenario (this
+    // backend is `headless: true`, and there is no GPU/pixel harness in this
+    // test environment). Unlike glsl-es, `output.surface`'s WGSL emitter has
+    // no per-layer `return`-equivalent side effect (see its own comment in
+    // `nodes/definitions/output.ts`) — the ONLY `return` in `sg_main`'s body
+    // is the final composite write, so the body comparison here is simpler:
+    // drop just that one trailing line.
+    function mainBody(module: string): string {
+      const start = module.indexOf('{') + 1;
+      const end = module.indexOf('\n}');
+      return module.slice(start, end).replace(/^\n/, '');
+    }
+
+    it('a document with a top-level group composites its children identically to the equivalent ungrouped document', () => {
+      const flatDoc = twoLayerDoc();
+      const flatProgram = wgslBackend.compileDocument(flatDoc);
+      expect(flatProgram.diagnostics).toEqual([]);
+      const flatBody = mainBody(flatProgram.module ?? '');
+
+      const groupedDoc = emptyDocument('Grouped');
+      const group: LayerGroup = {
+        kind: 'group',
+        id: 'grp_everything',
+        name: 'Everything',
+        blend: 'normal',
+        opacity: 1,
+        enabled: true,
+        visible: true,
+        children: flatDoc.layerStack.layers,
+      };
+      groupedDoc.layerStack.layers = [group];
+      const groupedProgram = wgslBackend.compileDocument(groupedDoc);
+      expect(groupedProgram.diagnostics).toEqual([]);
+      const groupedBody = mainBody(groupedProgram.module ?? '');
+
+      const flatLines = flatBody.split('\n');
+      const flatBodyWithoutFinalReturn = flatLines.slice(0, -1).join('\n');
+      expect(flatLines.at(-1)?.trim()).toMatch(/^return vec4<f32>\(/);
+      expect(groupedBody.startsWith(flatBodyWithoutFinalReturn)).toBe(true);
+
+      const groupOpacityUniform = layerOpacityUniformName(group.id);
+      expect(groupedProgram.uniforms.map((u) => u.name)).toContain(groupOpacityUniform);
+      const extra = groupedBody.slice(flatBodyWithoutFinalReturn.length);
+      const wrappingLine = extra
+        .split('\n')
+        .find((line) => line.includes('sg_blendNormal(vec3<f32>(0.0), (vec4<f32>(') && line.includes(groupOpacityUniform));
+      expect(wrappingLine).toBeDefined();
+      const wrappingVar = wrappingLine!.match(/let (\w+):/)![1];
+      expect(extra.trim().endsWith(`return vec4<f32>(${wrappingVar}, 1.0);`)).toBe(true);
+    });
   });
 
   it('falls back to Normal with a warning diagnostic for the unimplemented "custom" blend', () => {

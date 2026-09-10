@@ -13,7 +13,7 @@
 
 import { ident } from '../nodes/definitions/helpers';
 import { layerOpacityUniformName } from '../compiler/backends/glsl-es';
-import type { ScalarOrVector, ShaderDocument, SocketType } from '../model/document';
+import type { ScalarOrVector, ShaderDocument, ShaderGraph, SocketType, StackNode } from '../model/document';
 import type { TargetLang } from '../compiler/backend';
 import type { ViewerSource } from './scheduler';
 
@@ -39,21 +39,36 @@ interface StructuralGraph {
   edges: string[];
 }
 
-interface StructuralLayer {
-  id: string;
-  blend: string;
-  enabled: boolean;
-  soloed: boolean;
-  maskGraph: StructuralGraph | null;
-  outputNodeId: string;
-  nodes: StructuralNode[];
-  edges: string[];
-}
+/** A `StackNode`'s structural shape: a leaf layer's own graph, or (for a
+ *  group) its `children`, recursively — so nesting/order/blend/mask changes
+ *  anywhere in the tree register as a topology change exactly like a leaf
+ *  layer's own graph edits do. */
+type StructuralStackNode =
+  | {
+      kind: 'layer';
+      id: string;
+      blend: string;
+      enabled: boolean;
+      soloed: boolean;
+      maskGraph: StructuralGraph | null;
+      outputNodeId: string;
+      nodes: StructuralNode[];
+      edges: string[];
+    }
+  | {
+      kind: 'group';
+      id: string;
+      blend: string;
+      enabled: boolean;
+      soloed: boolean;
+      maskGraph: StructuralGraph | null;
+      children: StructuralStackNode[];
+    };
 
 // Node/edge order inside one graph never changes compiled semantics
 // (`resolveOrder` topologically sorts independently) — sorted so a no-op
 // array reshuffle can never look like a topology change.
-function structuralGraph(graph: ShaderDocument['layerStack']['layers'][number]['graph']): StructuralGraph {
+function structuralGraph(graph: ShaderGraph): StructuralGraph {
   return {
     outputNodeId: graph.outputNodeId,
     nodes: graph.nodes
@@ -63,14 +78,27 @@ function structuralGraph(graph: ShaderDocument['layerStack']['layers'][number]['
   };
 }
 
-function structuralLayer(layer: ShaderDocument['layerStack']['layers'][number]): StructuralLayer {
-  const graph = structuralGraph(layer.graph);
+function structuralStackNode(node: StackNode): StructuralStackNode {
+  const maskGraph = node.maskGraph ? structuralGraph(node.maskGraph) : null;
+  if (node.kind === 'group') {
+    return {
+      kind: 'group',
+      id: node.id,
+      blend: node.blend,
+      enabled: node.enabled,
+      soloed: node.soloed ?? false,
+      maskGraph,
+      children: node.children.map(structuralStackNode),
+    };
+  }
+  const graph = structuralGraph(node.graph);
   return {
-    id: layer.id,
-    blend: layer.blend,
-    enabled: layer.enabled,
-    soloed: layer.soloed ?? false,
-    maskGraph: layer.maskGraph ? structuralGraph(layer.maskGraph) : null,
+    kind: 'layer',
+    id: node.id,
+    blend: node.blend,
+    enabled: node.enabled,
+    soloed: node.soloed ?? false,
+    maskGraph,
     outputNodeId: graph.outputNodeId,
     nodes: graph.nodes,
     edges: graph.edges,
@@ -99,7 +127,7 @@ export function topologySignature(
     rig: doc.previewRig,
     viewerSource,
     // Layer stack ORDER is significant (compositing order) — not sorted.
-    layers: doc.layerStack.layers.map(structuralLayer),
+    layers: doc.layerStack.layers.map(structuralStackNode),
   });
 }
 
@@ -110,24 +138,33 @@ export interface UniformValueEntry {
 }
 
 /** Every value in `doc` that could conceivably be bound to a uniform: one
- *  entry per node param, plus one synthetic entry per layer's opacity. Used
- *  by the renderer to diff against the last-pushed values on a topology-
- *  unchanged edit and push only what actually changed. Names mirror exactly
- *  what the glsl-es backend declares (see `paramUniformName` /
- *  `layerOpacityUniformName`) — whether a name in here is actually a LIVE
- *  uniform in the currently-bound program is for the caller to check (some
- *  params, e.g. `noise.fbm`'s `octaves`, are baked as GLSL literals instead of
- *  uniforms and have no bound location at all). */
+ *  entry per node param, plus one synthetic entry per stack node's (layer OR
+ *  group — a group gets its own opacity uniform too, see `foldStack` in
+ *  `src/compiler/backends/glsl-es.ts`) opacity. Used by the renderer to diff
+ *  against the last-pushed values on a topology-unchanged edit and push only
+ *  what actually changed. Names mirror exactly what the glsl-es backend
+ *  declares (see `paramUniformName` / `layerOpacityUniformName`) — whether a
+ *  name in here is actually a LIVE uniform in the currently-bound program is
+ *  for the caller to check (some params, e.g. `noise.fbm`'s `octaves`, are
+ *  baked as GLSL literals instead of uniforms and have no bound location at
+ *  all). */
 export function collectUniformValues(doc: ShaderDocument): UniformValueEntry[] {
   const entries: UniformValueEntry[] = [];
-  for (const layer of doc.layerStack.layers) {
-    entries.push({ name: layerOpacityUniformName(layer.id), type: 'float', value: layer.opacity });
-    for (const node of layer.graph.nodes) {
-      for (const p of node.params) {
-        entries.push({ name: paramUniformName(node.id, p.id), type: p.type, value: p.value });
+  const collect = (nodes: StackNode[]) => {
+    for (const node of nodes) {
+      entries.push({ name: layerOpacityUniformName(node.id), type: 'float', value: node.opacity });
+      if (node.kind === 'group') {
+        collect(node.children);
+        continue;
+      }
+      for (const graphNode of node.graph.nodes) {
+        for (const p of graphNode.params) {
+          entries.push({ name: paramUniformName(graphNode.id, p.id), type: p.type, value: p.value });
+        }
       }
     }
-  }
+  };
+  collect(doc.layerStack.layers);
   return entries;
 }
 

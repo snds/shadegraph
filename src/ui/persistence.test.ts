@@ -18,6 +18,7 @@ import {
   type NodeParam,
   type ShaderDocument,
   type ShaderGraph,
+  type ShaderLayer,
   type ShaderNode,
 } from '../model/document';
 import { emptyLayer } from '../model/factory';
@@ -86,7 +87,7 @@ function richDocument(): ShaderDocument {
   const doc = emptyDocument('Rocky Planet');
 
   // ── Layer 1: base — uv → fbm → ramp → output
-  const base = doc.layerStack.layers[0];
+  const base = doc.layerStack.layers[0] as ShaderLayer;
   const uv = makeNode('input.uv', { x: -320, y: 40 }, { tiling: [4, 4], offset: [0.25, -0.5] });
   const fbm = makeNode(
     'noise.fbm',
@@ -208,8 +209,8 @@ describe('save → load round trip', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const before = doc.layerStack.layers[0].graph;
-    const after = result.doc.layerStack.layers[0].graph;
+    const before = (doc.layerStack.layers[0] as ShaderLayer).graph;
+    const after = (result.doc.layerStack.layers[0] as ShaderLayer).graph;
 
     expect(after.nodes.map((n) => n.position)).toEqual(before.nodes.map((n) => n.position));
     expect(after.nodes.find((n) => n.type === 'noise.fbm')?.params).toEqual(
@@ -234,9 +235,9 @@ describe('save → load round trip', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const [base, overlay] = result.doc.layerStack.layers;
-    expect(base.graph.edges).toEqual(doc.layerStack.layers[0].graph.edges);
-    expect(base.graph.groups).toEqual(doc.layerStack.layers[0].graph.groups);
+    const [base, overlay] = result.doc.layerStack.layers as ShaderLayer[];
+    expect(base.graph.edges).toEqual((doc.layerStack.layers[0] as ShaderLayer).graph.edges);
+    expect(base.graph.groups).toEqual((doc.layerStack.layers[0] as ShaderLayer).graph.groups);
     expect(overlay).toMatchObject({
       name: 'Snow',
       blend: 'screen',

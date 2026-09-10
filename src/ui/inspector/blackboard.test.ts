@@ -4,6 +4,7 @@ import {
   emptyDocument,
   type NodeParam,
   type ShaderDocument,
+  type ShaderLayer,
   type ShaderNode,
 } from '../../model/document';
 import { collectExposedParams, describeDocument, withParamExposed } from './blackboard';
@@ -27,7 +28,7 @@ const node = (id: string, params: NodeParam[]): ShaderNode => ({
 /** A two-layer document: base layer holds `fbm`, second layer holds `ramp`. */
 function fixture(): ShaderDocument {
   const doc = emptyDocument('Fixture');
-  const base = doc.layerStack.layers[0];
+  const base = doc.layerStack.layers[0] as ShaderLayer;
   base.graph.nodes.push(node('fbm', [p('frequency', { value: 2 }), p('gain', { value: 0.5 })]));
   return {
     ...doc,
@@ -36,6 +37,7 @@ function fixture(): ShaderDocument {
       layers: [
         base,
         {
+          kind: 'layer',
           id: 'layer-2',
           name: 'Detail',
           graph: {
@@ -76,9 +78,9 @@ describe('collectExposedParams', () => {
     expect(collectExposedParams(doc, () => 'FBM Noise')[0].nodeTitle).toBe('FBM Noise');
 
     const layers = doc.layerStack.layers.slice();
-    const graph = layers[0].graph;
+    const graph = (layers[0] as ShaderLayer).graph;
     layers[0] = {
-      ...layers[0],
+      ...(layers[0] as ShaderLayer),
       graph: {
         ...graph,
         nodes: graph.nodes.map((n) => (n.id === 'fbm' ? { ...n, title: 'Continents' } : n)),
@@ -102,8 +104,8 @@ describe('withParamExposed', () => {
     const before = fixture();
     const after = withParamExposed(before, 'fbm', 'gain', true)!;
     expect(after).not.toBe(before);
-    expect(before.layerStack.layers[0].graph.nodes[1].params[1].exposed).toBeUndefined();
-    expect(after.layerStack.layers[0].graph.nodes[1].params[1].exposed).toBe(true);
+    expect((before.layerStack.layers[0] as ShaderLayer).graph.nodes[1].params[1].exposed).toBeUndefined();
+    expect((after.layerStack.layers[0] as ShaderLayer).graph.nodes[1].params[1].exposed).toBe(true);
   });
 
   it('un-exposes a param in a non-active layer', () => {

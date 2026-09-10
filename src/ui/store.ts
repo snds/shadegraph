@@ -16,6 +16,7 @@ import { create } from 'zustand';
 
 import {
   emptyDocument,
+  type LayerGroup,
   type NodeGroup,
   type ScalarOrVector,
   type ShaderDocument,
@@ -25,6 +26,7 @@ import {
   type Socket,
   type SocketDirection,
   type SocketType,
+  type StackNode,
   type SubGraph,
 } from '../model/document';
 import {
@@ -35,7 +37,16 @@ import {
   type SocketTypeLookup,
 } from '../model/connect';
 import { emptyLayer, emptyMaskGraph } from '../model/factory';
-import { makeEdgeId, makeGroupId, makeNodeId, makeSocketId } from '../model/ids';
+import { makeEdgeId, makeGroupId, makeLayerGroupId, makeNodeId, makeSocketId } from '../model/ids';
+import {
+  findLayer,
+  findSiblingArray,
+  firstLayerId,
+  flattenLayers,
+  isGroupNode,
+  replaceSiblingArray,
+  updateStackNode,
+} from '../model/layerTree';
 import {
   extractSubGraph as extractSubGraphModel,
   instantiateSubGraph as instantiateSubGraphModel,
@@ -49,17 +60,20 @@ import type { CompiledProgram, TargetLang } from '../compiler/backend';
 
 // ── Selectors (pure, reusable by any pane) ─────────────────────────────────
 
-/** The active layer id, falling back to the bottom layer. */
+/** The active layer id, falling back to the first LEAF layer in stack order
+ *  (a group can never be "active" — there is no graph of its own to edit). */
 export function activeLayerId(doc: ShaderDocument): string {
   const { layers, activeLayerId: id } = doc.layerStack;
-  if (id && layers.some((l) => l.id === id)) return id;
-  return layers[0].id;
+  if (id && findLayer(layers, id)) return id;
+  // firstLayerId always resolves: `validateDocument`/every mutation keeps at
+  // least one leaf layer somewhere in the tree.
+  return firstLayerId(layers) as string;
 }
 
 /** The layer currently being edited. */
 export function activeLayer(doc: ShaderDocument): ShaderLayer {
   const id = activeLayerId(doc);
-  return doc.layerStack.layers.find((l) => l.id === id) ?? doc.layerStack.layers[0];
+  return findLayer(doc.layerStack.layers, id) ?? (flattenLayers(doc.layerStack.layers)[0] as ShaderLayer);
 }
 
 /** `{ kind: 'layer' }` shows the active layer's main graph (the default);
@@ -148,15 +162,15 @@ function withActiveGraph(
     // through to the layer/mask path exactly like `activeGraphKind` would.
   }
   const id = activeLayerId(doc);
-  const index = doc.layerStack.layers.findIndex((l) => l.id === id);
-  if (index < 0) return null;
-  const layer = doc.layerStack.layers[index];
+  const layer = findLayer(doc.layerStack.layers, id);
+  if (!layer) return null;
   const editingMask = activeGraphKind(doc, editingTarget) === 'mask';
   const currentGraph = editingMask ? (layer.maskGraph as ShaderGraph) : layer.graph;
   const nextGraph = fn(currentGraph);
   if (!nextGraph || nextGraph === currentGraph) return null;
-  const layers = doc.layerStack.layers.slice();
-  layers[index] = editingMask ? { ...layer, maskGraph: nextGraph } : { ...layer, graph: nextGraph };
+  const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (node) =>
+    editingMask ? { ...(node as ShaderLayer), maskGraph: nextGraph } : { ...(node as ShaderLayer), graph: nextGraph },
+  );
   return touch({ ...doc, layerStack: { ...doc.layerStack, layers } });
 }
 
@@ -253,8 +267,11 @@ function removeSubGraphSocket(
 
 // ── Store ──────────────────────────────────────────────────────────────────
 
-/** Layer fields the UI may edit directly. `id` and `graph` are not among them. */
-export type LayerPatch = Partial<Omit<ShaderLayer, 'id' | 'graph'>>;
+/** Layer fields the UI may edit directly. `id`, `graph`, and the `kind`
+ *  discriminant are not among them — `setLayerProp` also applies this same
+ *  patch shape to a `LayerGroup` (every other field here doubles as a valid
+ *  group field too), so `kind` must never be spreadable. */
+export type LayerPatch = Partial<Omit<ShaderLayer, 'id' | 'graph' | 'kind'>>;
 
 export interface EditorStore {
   /** The one durable artifact. */
@@ -333,9 +350,23 @@ export interface EditorStore {
   addLayer: (name?: string) => string | null;
   removeLayer: (id: string) => void;
   setLayerProp: (id: string, patch: LayerPatch) => void;
-  /** Move one layer a single step in SCREEN direction (see `./layers/reorder`).
-   *  No-op at either end of the stack. Never touches `selectedNodeIds`. */
+  /** Move one layer a single step in SCREEN direction (see `./layers/reorder`),
+   *  within whichever sibling array it actually lives in (the document root,
+   *  or its parent group's `children`) — a reorder never crosses a group
+   *  boundary. No-op at either end of that sibling array. Never touches
+   *  `selectedNodeIds`. */
   reorderLayer: (id: string, direction: StackDirection) => void;
+  /** Wrap `ids` (must all be SIBLINGS — resolve to the same parent array,
+   *  root or another group's `children`) in one new `LayerGroup`, preserving
+   *  their relative stack order and inserting the group at the position of
+   *  the earliest-indexed member. Returns the new group's id, or `null` (with
+   *  `lastError`) if `ids` is empty or its members are not all siblings. */
+  groupLayers: (ids: string[]) => string | null;
+  /** Splice `groupId`'s `children` back into its parent at the group's former
+   *  position, then delete the now-empty group — the inverse of `groupLayers`
+   *  for a contiguous selection. No-op (with `lastError`) if `groupId` does
+   *  not name a group anywhere in the tree. */
+  ungroupLayer: (groupId: string) => void;
 
   // Masks (a layer's optional secondary graph; see `EditingTarget`)
   /** Which graph `activeGraph`/`GraphCanvas` currently show: the active
@@ -676,7 +707,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   setActiveLayer(id) {
     const doc = get().doc;
-    if (!doc.layerStack.layers.some((l) => l.id === id)) {
+    if (!findLayer(doc.layerStack.layers, id)) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
@@ -694,7 +725,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   addLayer(name) {
     const doc = get().doc;
-    const layer = emptyLayer(name ?? `Layer ${doc.layerStack.layers.length + 1}`);
+    const layer = emptyLayer(name ?? `Layer ${flattenLayers(doc.layerStack.layers).length + 1}`);
     set({
       doc: touch({
         ...doc,
@@ -714,23 +745,38 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   removeLayer(id) {
     const doc = get().doc;
     const layers = doc.layerStack.layers;
-    if (layers.length <= 1) {
-      set({ lastError: 'A document needs at least one layer.' });
-      return;
-    }
-    const index = layers.findIndex((l) => l.id === id);
-    if (index < 0) {
+    const siblingInfo = findSiblingArray(layers, id);
+    if (!siblingInfo) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
-    const nextLayers = layers.filter((l) => l.id !== id);
-    const wasActive = activeLayerId(doc) === id;
-    const fallback = nextLayers[Math.min(index, nextLayers.length - 1)].id;
+    // Removing a group takes its whole subtree with it — count every LEAF
+    // inside it (1 for a plain layer), and refuse if that would empty the
+    // document of layers entirely.
+    const target = siblingInfo.siblings[siblingInfo.index];
+    const removedLeaves = flattenLayers([target]);
+    const totalLeaves = flattenLayers(layers).length;
+    if (totalLeaves - removedLeaves.length < 1) {
+      set({ lastError: 'A document needs at least one layer.' });
+      return;
+    }
+    const removedLeafIds = new Set(removedLeaves.map((l) => l.id));
+    const currentActiveId = activeLayerId(doc);
+    const wasActive = removedLeafIds.has(currentActiveId);
+    const { nodes: nextLayers } = updateStackNode(layers, id, () => null);
+    let fallback: string | undefined;
+    if (wasActive) {
+      const remainingSiblings = siblingInfo.siblings.filter((n) => n.id !== id);
+      const fallbackNode = remainingSiblings[Math.min(siblingInfo.index, remainingSiblings.length - 1)];
+      if (fallbackNode) fallback = firstLayerId([fallbackNode]);
+      fallback = fallback ?? firstLayerId(nextLayers);
+    }
     const editingTarget = get().editingTarget;
-    // A mask target pointing at the deleted layer is now meaningless even if
-    // that layer was not the active one (shouldn't normally happen, since
-    // entering mask editing also activates its layer, but stay defensive).
-    const staleTarget = wasActive || (editingTarget.kind === 'mask' && editingTarget.layerId === id);
+    // A mask target pointing at a layer inside the removed subtree is now
+    // meaningless even if that layer was not the active one (shouldn't
+    // normally happen, since entering mask editing also activates its layer,
+    // but stay defensive).
+    const staleTarget = wasActive || (editingTarget.kind === 'mask' && removedLeafIds.has(editingTarget.layerId));
     set({
       doc: touch({
         ...doc,
@@ -748,13 +794,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   setLayerProp(id, patch) {
     const doc = get().doc;
-    const index = doc.layerStack.layers.findIndex((l) => l.id === id);
-    if (index < 0) {
+    const { nodes: layers, changed } = updateStackNode(doc.layerStack.layers, id, (node) => ({
+      ...node,
+      ...patch,
+      id: node.id,
+    }));
+    if (!changed) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
-    const layers = doc.layerStack.layers.slice();
-    layers[index] = { ...layers[index], ...patch, id, graph: layers[index].graph };
     set({
       doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
       lastError: null,
@@ -763,8 +811,77 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   reorderLayer(id, direction) {
     const doc = get().doc;
-    const layers = moveLayer(doc.layerStack.layers, id, direction);
-    if (!layers) return;
+    const info = findSiblingArray(doc.layerStack.layers, id);
+    if (!info) {
+      set({ lastError: `No layer "${id}".` });
+      return;
+    }
+    const moved = moveLayer(info.siblings, id, direction);
+    if (!moved) return;
+    const layers = replaceSiblingArray(doc.layerStack.layers, id, moved);
+    set({
+      doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      lastError: null,
+    });
+  },
+
+  groupLayers(ids) {
+    if (ids.length === 0) {
+      set({ lastError: 'Select at least one layer to group.' });
+      return null;
+    }
+    const doc = get().doc;
+    const info = findSiblingArray(doc.layerStack.layers, ids[0]);
+    if (!info) {
+      set({ lastError: `No layer "${ids[0]}".` });
+      return null;
+    }
+    const idSet = new Set(ids);
+    const members = info.siblings.filter((n) => idSet.has(n.id));
+    if (members.length !== ids.length) {
+      set({ lastError: 'All selected layers must be siblings in the same group.' });
+      return null;
+    }
+    const firstIndex = info.siblings.findIndex((n) => idSet.has(n.id));
+    const remaining = info.siblings.filter((n) => !idSet.has(n.id));
+    const insertAt = info.siblings.slice(0, firstIndex).filter((n) => !idSet.has(n.id)).length;
+    const newGroup: LayerGroup = {
+      kind: 'group',
+      id: makeLayerGroupId(),
+      name: 'Group',
+      blend: 'normal',
+      opacity: 1,
+      enabled: true,
+      visible: true,
+      children: members,
+    };
+    const nextSiblings = [...remaining.slice(0, insertAt), newGroup, ...remaining.slice(insertAt)];
+    const layers = replaceSiblingArray(doc.layerStack.layers, ids[0], nextSiblings);
+    set({
+      doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      lastError: null,
+    });
+    return newGroup.id;
+  },
+
+  ungroupLayer(groupId) {
+    const doc = get().doc;
+    const info = findSiblingArray(doc.layerStack.layers, groupId);
+    if (!info) {
+      set({ lastError: `No group "${groupId}".` });
+      return;
+    }
+    const node = info.siblings[info.index];
+    if (!isGroupNode(node)) {
+      set({ lastError: `"${groupId}" is not a group.` });
+      return;
+    }
+    const nextSiblings = [
+      ...info.siblings.slice(0, info.index),
+      ...node.children,
+      ...info.siblings.slice(info.index + 1),
+    ];
+    const layers = replaceSiblingArray(doc.layerStack.layers, groupId, nextSiblings);
     set({
       doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
       lastError: null,
@@ -773,19 +890,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   addMaskToLayer(id) {
     const doc = get().doc;
-    const index = doc.layerStack.layers.findIndex((l) => l.id === id);
-    if (index < 0) {
+    const layer = findLayer(doc.layerStack.layers, id);
+    if (!layer) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
-    const layer = doc.layerStack.layers[index];
     if (layer.maskGraph) {
       // Already has one — treat as "go edit it" rather than an error.
       get().enterMaskEditing(id);
       return;
     }
-    const layers = doc.layerStack.layers.slice();
-    layers[index] = { ...layer, maskGraph: emptyMaskGraph() };
+    const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (node) => ({
+      ...node,
+      maskGraph: emptyMaskGraph(),
+    }));
     set({
       doc: touch({
         ...doc,
@@ -799,16 +917,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   removeMaskFromLayer(id) {
     const doc = get().doc;
-    const index = doc.layerStack.layers.findIndex((l) => l.id === id);
-    if (index < 0) {
+    const layer = findLayer(doc.layerStack.layers, id);
+    if (!layer) {
       set({ lastError: `No layer "${id}".` });
       return;
     }
-    const layer = doc.layerStack.layers[index];
     if (!layer.maskGraph) return;
-    const { maskGraph: _removed, ...withoutMask } = layer;
-    const layers = doc.layerStack.layers.slice();
-    layers[index] = withoutMask;
+    const { nodes: layers } = updateStackNode(doc.layerStack.layers, id, (node) => {
+      const { maskGraph: _removed, ...withoutMask } = node;
+      return withoutMask as StackNode;
+    });
     const editingTarget = get().editingTarget;
     const wasEditingThisMask = editingTarget.kind === 'mask' && editingTarget.layerId === id;
     set({
@@ -821,7 +939,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   enterMaskEditing(layerId) {
     const doc = get().doc;
-    const layer = doc.layerStack.layers.find((l) => l.id === layerId);
+    const layer = findLayer(doc.layerStack.layers, layerId);
     if (!layer) {
       set({ lastError: `No layer "${layerId}".` });
       return;

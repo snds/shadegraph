@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { SCHEMA_VERSION, emptyDocument, type ShaderDocument } from './document';
+import { SCHEMA_VERSION, emptyDocument, type LayerGroup, type ShaderDocument, type ShaderLayer } from './document';
 import { emptyLayer } from './factory';
 import { DocumentParseError, deserialize, serialize, validateDocument } from './serialize';
 
@@ -9,7 +9,7 @@ import { DocumentParseError, deserialize, serialize, validateDocument } from './
 function richDocument(): ShaderDocument {
   const doc = emptyDocument('Rocky');
   const second = emptyLayer('Crust');
-  const graph = doc.layerStack.layers[0].graph;
+  const graph = (doc.layerStack.layers[0] as ShaderLayer).graph;
   const uvId = 'uv_1';
 
   graph.nodes.push({
@@ -119,7 +119,9 @@ describe('deserialize validation', () => {
 
   it('rejects a layer whose graph is missing its output node id', () => {
     const doc = emptyDocument();
-    delete (doc.layerStack.layers[0].graph as { outputNodeId?: string }).outputNodeId;
+    delete (
+      (doc.layerStack.layers[0] as ShaderLayer).graph as { outputNodeId?: string }
+    ).outputNodeId;
 
     parseFails(JSON.stringify(doc), /outputNodeId/);
   });
@@ -136,5 +138,92 @@ describe('deserialize validation', () => {
 
     expect(validateDocument(JSON.parse(serialize(doc)))).toEqual(doc);
     expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
+  it('rejects a group whose "children" array is missing', () => {
+    const doc = emptyDocument();
+    (doc.layerStack.layers as unknown[]).push({
+      kind: 'group',
+      id: 'g1',
+      name: 'Broken group',
+      blend: 'normal',
+      opacity: 1,
+      enabled: true,
+      visible: true,
+    });
+
+    parseFails(JSON.stringify(doc), /"children"/);
+  });
+
+  it('rejects a document whose only stack nodes are empty groups (no leaf layer anywhere)', () => {
+    const doc = emptyDocument();
+    doc.layerStack.layers = [
+      {
+        kind: 'group',
+        id: 'g1',
+        name: 'Empty group',
+        blend: 'normal',
+        opacity: 1,
+        enabled: true,
+        visible: true,
+        children: [],
+      },
+    ];
+
+    parseFails(JSON.stringify(doc), /at least one leaf layer/);
+  });
+});
+
+describe('legacy documents (pre-LayerGroup)', () => {
+  it('loads a saved document that predates the "kind" discriminant', () => {
+    const doc = richDocument();
+    // Simulate a file saved before `LayerGroup`/`kind` existed: every stack
+    // node was implicitly a leaf layer, so the field was never written.
+    const legacyJson = JSON.stringify(doc, (key, value) => (key === 'kind' ? undefined : value));
+    expect(legacyJson).not.toContain('"kind"');
+
+    const restored = deserialize(legacyJson);
+    expect(restored.layerStack.layers.map((l) => l.id)).toEqual(doc.layerStack.layers.map((l) => l.id));
+    for (const layer of restored.layerStack.layers) {
+      expect(layer.kind).toBe('layer');
+    }
+    expect((restored.layerStack.layers[0] as ShaderLayer).graph.nodes).toEqual(
+      (doc.layerStack.layers[0] as ShaderLayer).graph.nodes,
+    );
+  });
+});
+
+describe('LayerGroup round-trip', () => {
+  it('round-trips a document with nested groups (2+ levels deep) losslessly', () => {
+    const doc = emptyDocument('Nested');
+    const leafA = emptyLayer('A');
+    const leafB = emptyLayer('B');
+    const leafC = emptyLayer('C');
+    const innerGroup: LayerGroup = {
+      kind: 'group',
+      id: 'inner_group',
+      name: 'Inner',
+      blend: 'screen',
+      opacity: 0.75,
+      enabled: true,
+      visible: true,
+      soloed: false,
+      children: [leafB, leafC],
+    };
+    const outerGroup: LayerGroup = {
+      kind: 'group',
+      id: 'outer_group',
+      name: 'Outer',
+      blend: 'multiply',
+      opacity: 0.5,
+      enabled: true,
+      visible: true,
+      children: [leafA, innerGroup],
+    };
+    doc.layerStack.layers = [...doc.layerStack.layers, outerGroup];
+
+    const restored = deserialize(serialize(doc));
+    expect(restored).toEqual(doc);
+    expect(serialize(restored)).toBe(serialize(doc));
   });
 });

@@ -15,6 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type { NodeParam, ShaderDocument } from '../../model/document';
+import { flattenLayers, mapLeafLayers } from '../../model/layerTree';
 
 export interface BlackboardEntry {
   /** Stable React key / identity for the row. */
@@ -36,7 +37,7 @@ export type TitleLookup = (type: string) => string | undefined;
  */
 export function collectExposedParams(doc: ShaderDocument, titleOf?: TitleLookup): BlackboardEntry[] {
   const entries: BlackboardEntry[] = [];
-  for (const layer of doc.layerStack.layers) {
+  for (const layer of flattenLayers(doc.layerStack.layers)) {
     for (const node of layer.graph.nodes) {
       for (const param of node.params) {
         if (!param.exposed) continue;
@@ -71,8 +72,7 @@ export function withParamExposed(
   paramId: string,
   exposed: boolean,
 ): ShaderDocument | null {
-  let changed = false;
-  const layers = doc.layerStack.layers.map((layer) => {
+  const layers = mapLeafLayers(doc.layerStack.layers, (layer) => {
     const nodeIndex = layer.graph.nodes.findIndex((n) => n.id === nodeId);
     if (nodeIndex < 0) return layer;
     const node = layer.graph.nodes[nodeIndex];
@@ -84,10 +84,9 @@ export function withParamExposed(
     params[paramIndex] = { ...params[paramIndex], exposed };
     const nodes = layer.graph.nodes.slice();
     nodes[nodeIndex] = { ...node, params };
-    changed = true;
     return { ...layer, graph: { ...layer.graph, nodes } };
   });
-  if (!changed) return null;
+  if (layers === doc.layerStack.layers) return null;
   return {
     ...doc,
     layerStack: { ...doc.layerStack, layers },
@@ -110,7 +109,7 @@ export function describeDocument(doc: ShaderDocument): DocumentSummary {
     name: doc.name,
     archetype: doc.archetype && doc.archetype !== '' ? doc.archetype : '—',
     previewRig: doc.previewRig,
-    layerCount: doc.layerStack.layers.length,
+    layerCount: flattenLayers(doc.layerStack.layers).length,
     exposedCount: collectExposedParams(doc).length,
   };
 }

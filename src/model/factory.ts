@@ -7,8 +7,8 @@
 // is ever set to `undefined` — that would break lossless round-trips.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { ShaderGraph, ShaderLayer } from './document';
-import { makeLayerId, makeNodeId } from './ids';
+import type { LayerGroup, ShaderGraph, ShaderLayer, StackNode } from './document';
+import { makeLayerGroupId, makeLayerId, makeNodeId } from './ids';
 
 /** The node type every graph terminates in. */
 export const OUTPUT_NODE_TYPE = 'output.surface';
@@ -59,6 +59,7 @@ export function emptyMaskGraph(position = { x: 640, y: 200 }): ShaderGraph {
 /** A visible, fully-opaque layer wrapping a fresh empty graph. */
 export function emptyLayer(name = 'Layer'): ShaderLayer {
   return {
+    kind: 'layer',
     id: makeLayerId(),
     name,
     graph: emptyGraph(),
@@ -66,5 +67,21 @@ export function emptyLayer(name = 'Layer'): ShaderLayer {
     opacity: 1,
     enabled: true,
     visible: true,
+  };
+}
+
+/** A visible, fully-opaque, empty group — the `LayerGroup` equivalent of
+ *  `emptyLayer`, for `groupLayers`/tests. `children` defaults to empty; the
+ *  store's `groupLayers` action fills it with the wrapped siblings itself. */
+export function emptyLayerGroup(name = 'Group', children: StackNode[] = []): LayerGroup {
+  return {
+    kind: 'group',
+    id: makeLayerGroupId(),
+    name,
+    blend: 'normal',
+    opacity: 1,
+    enabled: true,
+    visible: true,
+    children,
   };
 }

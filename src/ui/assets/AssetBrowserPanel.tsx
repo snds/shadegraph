@@ -1,8 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ShadeGraph — Asset browser panel
 // ───────────────────────────────────────────────────────────────────────────
-// A toggleable, self-mounting pane (same shape as `CodePanel.tsx`) over the
-// connected asset folder. Reads/calls `src/storage`'s public surface only —
+// Bare content (no toggle, no overlay, no own `open` state) over the
+// connected asset folder — mounted as the "Assets" pivot in the shell's
+// pivot rail (`src/ui/shell/pivotItems.tsx`), which owns whether this is on
+// screen. Reads/calls `src/storage`'s public surface only —
 // `AssetTreeNode`'s plain `{ name, kind, preview? }`-shaped data and the
 // store's action methods. Never imports a `FileSystemHandle`, a stream, or a
 // blob URL directly; `preview` here is just the string URL the store already
@@ -11,13 +13,9 @@
 // Boots by calling `reconnectFromStorage()` once on mount, so a previously-
 // connected folder (persisted handle, permission already granted) is ready
 // without the user re-picking it every session, per the task's definition of
-// done.
-//
-// Mounted from `src/main.tsx`, not `src/ui/App.tsx` — App.tsx is an existing
-// Phase 1-3 file this task was scoped to leave untouched; mounting a second,
-// fully independent React tree at the root is the least invasive way to get
-// this self-contained pane on screen. See `src/main.tsx` for the one-line
-// addition.
+// done. Since the pivot host only mounts the active pivot's content, this
+// effect re-runs each time the Assets pivot is (re-)selected — cheap and
+// idempotent, so that's harmless.
 //
 // The "graph this" action (Phase 5 Wave 5b, the last missing link between
 // `graphFromRecognizedObject()`/the manifest store and an actual user-facing
@@ -30,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { flattenVisibleTree, useAssetStore, type AssetTreeNode } from '../../storage';
 import type { RecognizedShaderObject } from '../../storage/recognition';
+import { Icon } from '../shell/Icon';
 import { useManifestStore } from '../manifest/manifestStore';
 import { useEditorStore } from '../store';
 import { graphThis, type GraphThisResult } from './graphThis';
@@ -61,7 +60,6 @@ function messageFor(object: RecognizedShaderObject, result: GraphThisResult): Gr
 }
 
 export function AssetBrowserPanel() {
-  const [open, setOpen] = useState(false);
   const status = useAssetStore((s) => s.status);
   const error = useAssetStore((s) => s.error);
   const rootName = useAssetStore((s) => s.rootName);
@@ -101,90 +99,67 @@ export function AssetBrowserPanel() {
   }, [reconnectFromStorage]);
 
   return (
-    <div className="sg-assets-dock">
-      <button
-        type="button"
-        className="sg-assets-toggle"
-        aria-pressed={open}
-        aria-label={open ? 'Hide asset browser' : 'Show asset browser'}
-        onClick={() => setOpen((v) => !v)}
-      >
-        Assets
-        {status === 'connected' ? <span className="sg-assets-toggle__dot" aria-hidden="true" /> : null}
-      </button>
+    <div className="sg-assets-panel-content" aria-label="Asset folder browser">
+      <header className="sg-assets-panel__head">
+        <span className="sg-assets-panel__title">{rootName ?? 'No folder connected'}</span>
+      </header>
 
-      {open ? (
-        <aside className="sg-assets-panel" aria-label="Asset folder browser">
-          <header className="sg-assets-panel__head">
-            <span className="sg-assets-panel__title">{rootName ?? 'No folder connected'}</span>
+      <div className="sg-assets-panel__body">
+        {status === 'disconnected' ? (
+          <div className="sg-assets-empty">
+            <p>Connect a local folder to browse reference media.</p>
+            <button type="button" className="sg-assets-connect" onClick={() => void connect()}>
+              Connect folder…
+            </button>
+          </div>
+        ) : null}
+
+        {status === 'connecting' ? <p className="sg-assets-empty">Connecting…</p> : null}
+
+        {status === 'needsPermission' ? (
+          <div className="sg-assets-empty">
+            <p>Re-grant access to “{rootName}” to continue.</p>
+            <button type="button" className="sg-assets-connect" onClick={() => void grantPermission()}>
+              Grant permission
+            </button>
+          </div>
+        ) : null}
+
+        {status === 'error' ? (
+          <div className="sg-assets-empty">
+            <p className="sg-assets-error">{error ?? 'Something went wrong.'}</p>
+            <button type="button" className="sg-assets-connect" onClick={() => void connect()}>
+              Connect a different folder…
+            </button>
+          </div>
+        ) : null}
+
+        {graphThisMessage ? (
+          <div
+            className={`sg-assets-graph-message sg-assets-graph-message--${graphThisMessage.kind}`}
+            role={graphThisMessage.kind === 'missing-requires' ? 'alert' : 'status'}
+          >
+            <span>{graphThisMessage.text}</span>
             <button
               type="button"
-              className="sg-assets-panel__close"
-              onClick={() => setOpen(false)}
-              aria-label="Close asset browser"
+              className="sg-assets-graph-message__dismiss"
+              onClick={() => setGraphThisMessage(null)}
+              aria-label="Dismiss"
             >
-              ×
+              <Icon name="close" />
             </button>
-          </header>
-
-          <div className="sg-assets-panel__body">
-            {status === 'disconnected' ? (
-              <div className="sg-assets-empty">
-                <p>Connect a local folder to browse reference media.</p>
-                <button type="button" className="sg-assets-connect" onClick={() => void connect()}>
-                  Connect folder…
-                </button>
-              </div>
-            ) : null}
-
-            {status === 'connecting' ? <p className="sg-assets-empty">Connecting…</p> : null}
-
-            {status === 'needsPermission' ? (
-              <div className="sg-assets-empty">
-                <p>Re-grant access to “{rootName}” to continue.</p>
-                <button type="button" className="sg-assets-connect" onClick={() => void grantPermission()}>
-                  Grant permission
-                </button>
-              </div>
-            ) : null}
-
-            {status === 'error' ? (
-              <div className="sg-assets-empty">
-                <p className="sg-assets-error">{error ?? 'Something went wrong.'}</p>
-                <button type="button" className="sg-assets-connect" onClick={() => void connect()}>
-                  Connect a different folder…
-                </button>
-              </div>
-            ) : null}
-
-            {graphThisMessage ? (
-              <div
-                className={`sg-assets-graph-message sg-assets-graph-message--${graphThisMessage.kind}`}
-                role={graphThisMessage.kind === 'missing-requires' ? 'alert' : 'status'}
-              >
-                <span>{graphThisMessage.text}</span>
-                <button
-                  type="button"
-                  className="sg-assets-graph-message__dismiss"
-                  onClick={() => setGraphThisMessage(null)}
-                  aria-label="Dismiss"
-                >
-                  ×
-                </button>
-              </div>
-            ) : null}
-
-            {status === 'connected' ? <AssetTreeView onGraphThis={handleGraphThis} /> : null}
           </div>
+        ) : null}
 
-          {status === 'connected' ? (
-            <footer className="sg-assets-panel__foot">
-              <button type="button" className="sg-assets-disconnect" onClick={() => void disconnect()}>
-                Disconnect
-              </button>
-            </footer>
-          ) : null}
-        </aside>
+        {status === 'connected' ? <AssetTreeView onGraphThis={handleGraphThis} /> : null}
+      </div>
+
+      {status === 'connected' ? (
+        <footer className="sg-assets-panel__foot">
+          <button type="button" className="sg-assets-disconnect" onClick={() => void disconnect()}>
+            Disconnect
+          </button>
+        </footer>
       ) : null}
     </div>
   );
@@ -291,7 +266,11 @@ function AssetRow({
           onClick={() => void onToggle(node.id)}
           aria-label={node.expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
         >
-          {node.loadingChildren ? '…' : node.expanded ? '▾' : '▸'}
+          {node.loadingChildren ? (
+            <Icon name="progress_activity" />
+          ) : (
+            <Icon name={node.expanded ? 'expand_more' : 'chevron_right'} />
+          )}
         </button>
       ) : (
         <span className="sg-assets-row__spacer" aria-hidden="true" />
@@ -303,7 +282,7 @@ function AssetRow({
         <video className="sg-assets-row__thumb" src={node.preview} muted playsInline />
       ) : (
         <span className="sg-assets-row__icon" aria-hidden="true">
-          {isFolder ? '▤' : '‖'}
+          <Icon name={isFolder ? 'folder' : 'draft'} />
         </span>
       )}
 

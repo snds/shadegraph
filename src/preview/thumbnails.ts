@@ -31,6 +31,7 @@ import type {
 } from '../compiler/backend';
 import { backends } from '../compiler/backend';
 import type { ScalarOrVector, ShaderDocument, ShaderGraph, ShaderLayer } from '../model/document';
+import { findLayerOwningNode, flattenLayers } from '../model/layerTree';
 import type { ThumbnailRequest } from './scheduler';
 import { toThreeUniformValue } from './renderer';
 
@@ -47,12 +48,12 @@ export function snapThumbnailSize(requested: number | undefined): number {
 }
 
 function findLayerContaining(doc: ShaderDocument, nodeId: string): ShaderLayer | undefined {
-  return doc.layerStack.layers.find((l) => l.graph.nodes.some((n) => n.id === nodeId));
+  return findLayerOwningNode(doc.layerStack.layers, nodeId);
 }
 
 function allNodeIds(doc: ShaderDocument): Set<string> {
   const ids = new Set<string>();
-  for (const layer of doc.layerStack.layers) {
+  for (const layer of flattenLayers(doc.layerStack.layers)) {
     for (const node of layer.graph.nodes) ids.add(node.id);
   }
   return ids;
@@ -92,15 +93,17 @@ export function downstreamClosure(graph: ShaderGraph, nodeId: string): Set<strin
  *  `downstreamClosure` themselves (this only finds the ROOT of a change). */
 export function diffChangedNodeIds(prev: ShaderDocument | null, next: ShaderDocument): Set<string> {
   const changed = new Set<string>();
+  const nextLayers = flattenLayers(next.layerStack.layers);
   if (!prev) {
-    for (const layer of next.layerStack.layers) {
+    for (const layer of nextLayers) {
       for (const node of layer.graph.nodes) changed.add(node.id);
     }
     return changed;
   }
 
-  for (const layer of next.layerStack.layers) {
-    const prevLayer = prev.layerStack.layers.find((l) => l.id === layer.id);
+  const prevLayers = flattenLayers(prev.layerStack.layers);
+  for (const layer of nextLayers) {
+    const prevLayer = prevLayers.find((l) => l.id === layer.id);
     if (!prevLayer) {
       for (const node of layer.graph.nodes) changed.add(node.id);
       continue;

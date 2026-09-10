@@ -27,6 +27,7 @@
 import { useMemo, useState } from 'react';
 
 import { activeLayerId, useEditorStore } from '../store';
+import { findLayerOwningNode } from '../../model/layerTree';
 import type { ViewerSource } from '../../preview/scheduler';
 import './codePanel.css';
 
@@ -41,7 +42,7 @@ function viewerSourceLabel(src: ViewerSource): string {
  *  layer's graph — see `GraphCanvas.tsx`). */
 function selectNodeAcrossLayers(nodeId: string): void {
   const { doc, setActiveLayer, selectNodes } = useEditorStore.getState();
-  const owner = doc.layerStack.layers.find((l) => l.graph.nodes.some((n) => n.id === nodeId));
+  const owner = findLayerOwningNode(doc.layerStack.layers, nodeId);
   if (owner && owner.id !== activeLayerId(doc)) setActiveLayer(owner.id);
   selectNodes([nodeId]);
 }

@@ -195,6 +195,10 @@ export type BlendMode =
   | 'custom'; // blend defined by the layer's own blend graph
 
 export interface ShaderLayer {
+  /** Discriminant against `LayerGroup` — see `StackNode`. A leaf layer always
+   *  carries its own `graph`; a group never does (it composites its
+   *  `children` instead). */
+  kind: 'layer';
   id: string;
   name: string;
   /** The graph that produces this layer's contribution. */
@@ -218,9 +222,52 @@ export interface ShaderLayer {
   maskGraph?: ShaderGraph;
 }
 
+/** A folder in the layer stack (Photoshop group / Substance folder): a node
+ *  in the same tree as `ShaderLayer` (see `StackNode`), carrying every
+ *  compositing-relevant field a leaf layer has EXCEPT `graph` — a group has
+ *  no graph of its own, it composites `children` instead — plus `children`
+ *  itself. The compiler folds `children` bottom-to-top into a local result
+ *  first (recursing into any nested group exactly the same way), then blends
+ *  that local result into its OWN parent using this group's `blend`/
+ *  `opacity`/`maskGraph`, precisely as if it were one leaf layer whose
+ *  "graph" happens to be its composited children. See
+ *  `src/compiler/backends/glsl-es.ts`'s `foldStack`. */
+export interface LayerGroup {
+  kind: 'group';
+  id: string;
+  name: string;
+  blend: BlendMode;
+  /** 0..1. */
+  opacity: number;
+  /** Participates in the compiled output, same semantics as `ShaderLayer.enabled`. */
+  enabled: boolean;
+  /** Same semantics as `ShaderLayer.visible`. */
+  visible: boolean;
+  /** Solo: when any sibling (layer or group) at this group's OWN level is
+   *  soloed, only soloed siblings at that level composite — solo is scoped
+   *  per sibling-array, not document-wide, so soloing something inside a
+   *  group never silently mutes everything outside it. */
+  soloed?: boolean;
+  /** Same contract as `ShaderLayer.maskGraph`, applied to the group's own
+   *  folded composite rather than a single graph's output. */
+  maskGraph?: ShaderGraph;
+  /** Bottom-to-top compositing order within this group, same convention as
+   *  `LayerStack.layers`. */
+  children: StackNode[];
+}
+
+/** One entry in the layer stack tree: either a leaf `ShaderLayer` (owns a
+ *  graph) or a `LayerGroup` (owns `children`, recursively more `StackNode`s).
+ *  Discriminated by `kind` so a plain `switch`/narrowing check is enough —
+ *  see `src/model/layerTree.ts` for the shared traversal helpers every
+ *  consumer (compiler, store, preview) uses instead of re-deriving this
+ *  recursion ad hoc. */
+export type StackNode = ShaderLayer | LayerGroup;
+
 export interface LayerStack {
-  /** Bottom-to-top compositing order == array order (index 0 = base). */
-  layers: ShaderLayer[];
+  /** Bottom-to-top compositing order == array order (index 0 = base). Each
+   *  entry is either a leaf layer or a `LayerGroup` folder — see `StackNode`. */
+  layers: StackNode[];
   activeLayerId?: string;
 }
 
@@ -275,6 +322,7 @@ export function emptyDocument(name = 'Untitled'): ShaderDocument {
     layerStack: {
       layers: [
         {
+          kind: 'layer',
           id: crypto.randomUUID(),
           name: 'Base',
           graph: baseGraph,

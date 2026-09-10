@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyDocument, type ShaderDocument, type ShaderGraph } from '../model/document';
+import { emptyDocument, type ShaderDocument, type ShaderGraph, type ShaderLayer } from '../model/document';
 import type { CompiledProgram } from '../compiler/backend';
 import {
   diffChangedNodeIds,
@@ -9,6 +9,13 @@ import {
   ThumbnailScheduler,
   type ThumbnailGpu,
 } from './thumbnails';
+
+/** Every fixture document here is a bare `emptyDocument()` (or one with a
+ *  plain leaf layer pushed) with no groups — its top-level stack nodes are
+ *  always leaves. */
+function layer0(doc: ShaderDocument): ShaderLayer {
+  return doc.layerStack.layers[0] as ShaderLayer;
+}
 
 // ── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -53,7 +60,7 @@ describe('downstreamClosure', () => {
 
 function docWithChain(): ShaderDocument {
   const doc = emptyDocument('Diff fixture');
-  doc.layerStack.layers[0].graph = chainGraph();
+  layer0(doc).graph = chainGraph();
   return doc;
 }
 
@@ -75,25 +82,25 @@ describe('diffChangedNodeIds', () => {
 
   it('a param edit on one node only reports that node (caller expands downstream separately)', () => {
     const doc = docWithChain();
-    doc.layerStack.layers[0].graph.nodes[0].params = [
+    layer0(doc).graph.nodes[0].params = [
       { id: 'x', label: 'X', type: 'float', value: 1, ui: 'slider' },
     ];
     const edited = clone(doc);
-    (edited.layerStack.layers[0].graph.nodes[0].params[0].value as number) = 2;
+    (layer0(edited).graph.nodes[0].params[0].value as number) = 2;
     expect(diffChangedNodeIds(doc, edited)).toEqual(new Set(['a']));
   });
 
   it('a bypass toggle reports that node', () => {
     const doc = docWithChain();
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes[1].bypassed = true;
+    layer0(edited).graph.nodes[1].bypassed = true;
     expect(diffChangedNodeIds(doc, edited)).toEqual(new Set(['b']));
   });
 
   it('adding a node reports only the new node', () => {
     const doc = docWithChain();
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes.push({
+    layer0(edited).graph.nodes.push({
       id: 'd',
       type: 'math.add',
       position: { x: 0, y: 0 },
@@ -105,7 +112,7 @@ describe('diffChangedNodeIds', () => {
   it('adding/removing an edge reports both endpoints', () => {
     const doc = docWithChain();
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.edges.push({
+    layer0(edited).graph.edges.push({
       id: 'e3',
       source: { node: 'lonely', socket: 'out' },
       target: { node: 'c', socket: 'b' },
@@ -126,6 +133,7 @@ describe('diffChangedNodeIds', () => {
     const doc = docWithChain();
     const edited = clone(doc);
     edited.layerStack.layers.push({
+      kind: 'layer',
       id: 'layer2',
       name: 'New layer',
       graph: { nodes: [{ id: 'z', type: 'math.add', position: { x: 0, y: 0 }, params: [] }], edges: [], outputNodeId: 'z' },
@@ -236,7 +244,7 @@ describe('ThumbnailScheduler', () => {
     compile.mockClear();
 
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes[1].bypassed = true; // node "b"
+    layer0(edited).graph.nodes[1].bypassed = true; // node "b"
     scheduler.onDocument(edited, 'glsl-es', diffChangedNodeIds(doc, edited));
 
     await Promise.all([scheduler.request({ nodeId: 'b' }), scheduler.request({ nodeId: 'c' })]);
@@ -295,8 +303,8 @@ describe('ThumbnailScheduler', () => {
     const pending = scheduler.request({ nodeId: 'a' });
 
     const edited = clone(doc);
-    edited.layerStack.layers[0].graph.nodes = edited.layerStack.layers[0].graph.nodes.filter((n) => n.id !== 'a');
-    edited.layerStack.layers[0].graph.edges = edited.layerStack.layers[0].graph.edges.filter(
+    layer0(edited).graph.nodes = layer0(edited).graph.nodes.filter((n) => n.id !== 'a');
+    layer0(edited).graph.edges = layer0(edited).graph.edges.filter(
       (e) => e.source.node !== 'a' && e.target.node !== 'a',
     );
     scheduler.onDocument(edited, 'glsl-es', new Set());

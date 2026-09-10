@@ -16,6 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import type { NodeParam, ShaderDocument } from '../model/document';
+import { mapLeafLayers } from '../model/layerTree';
 import type { PerformanceBudgetPopulationConfig, VariationRanges } from '../model/settings';
 
 /** Uniform sample in `[0, 1)`, same contract as `Math.random`. Injectable so
@@ -48,8 +49,7 @@ export function applyVariantValues(doc: ShaderDocument, values: Record<string, n
   const ids = Object.keys(values);
   if (ids.length === 0) return doc;
 
-  let layersChanged = false;
-  const layers = doc.layerStack.layers.map((layer) => {
+  const layers = mapLeafLayers(doc.layerStack.layers, (layer) => {
     let layerChanged = false;
     const nodes = layer.graph.nodes.map((node) => {
       let nodeChanged = false;
@@ -63,9 +63,9 @@ export function applyVariantValues(doc: ShaderDocument, values: Record<string, n
       return { ...node, params };
     });
     if (!layerChanged) return layer;
-    layersChanged = true;
     return { ...layer, graph: { ...layer.graph, nodes } };
   });
+  const layersChanged = layers !== doc.layerStack.layers;
 
   let blackboardChanged = false;
   const blackboard = doc.blackboard.map((param) => {

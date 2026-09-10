@@ -13,17 +13,18 @@
 
 import type { ShaderDocument, ShaderGraph, ShaderNode } from '../../model/document';
 import { makeNodeId } from '../../model/ids';
+import { allStackNodes } from '../../model/layerTree';
 import type { ProjectManifest } from '../../model/projectManifest';
 import { CHUNK_RAW_NODE_TYPE } from '../../nodes/definitions/chunk';
 import { graphFromRecognizedObject, type RecognizedShaderObject } from '../../storage/recognition';
 
 /** Every `ShaderGraph` embedded anywhere in `doc` — every layer's main graph,
- *  every layer's mask graph, and every subgraph's own graph. */
+ *  every layer's OR group's mask graph, and every subgraph's own graph. */
 function allGraphs(doc: ShaderDocument): ShaderGraph[] {
   const graphs: ShaderGraph[] = [];
-  for (const layer of doc.layerStack.layers) {
-    graphs.push(layer.graph);
-    if (layer.maskGraph) graphs.push(layer.maskGraph);
+  for (const node of allStackNodes(doc.layerStack.layers)) {
+    if (node.kind === 'layer') graphs.push(node.graph);
+    if (node.maskGraph) graphs.push(node.maskGraph);
   }
   for (const subGraph of doc.subGraphs) graphs.push(subGraph.graph);
   return graphs;

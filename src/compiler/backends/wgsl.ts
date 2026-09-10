@@ -28,7 +28,9 @@ import type {
   ShaderDocument,
   ShaderGraph,
   SocketType,
+  StackNode,
 } from '../../model/document';
+import { findLayer, findLayerOwningNode } from '../../model/layerTree';
 import { nodes as defaultRegistry, type NodeRegistry } from '../../nodes/registry';
 import {
   backends,
@@ -37,7 +39,7 @@ import {
   type Diagnostic,
   type ShaderBackend,
 } from '../backend';
-import { createEmitSink, lowerGraph, type LowerHooks } from '../lower';
+import { createEmitSink, lowerGraph, type EmitSinkHandle, type LowerHooks } from '../lower';
 // Naming convention only (`u_layer_${id}_opacity`) — pure string formatting,
 // not GLSL syntax, so it is reused verbatim rather than duplicated. See this
 // file's header comment / task report for why this didn't need to move.
@@ -370,18 +372,69 @@ function compileGraph(
   };
 }
 
-/** Compiles the whole document: every participating layer's graph, composited
- *  bottom-to-top with its own blend mode + opacity, exactly like
- *  `glsl-es.ts`'s `compileDocument` — same structure, WGSL syntax. */
+/** Folds one sibling array of the layer-stack tree (the document root, or one
+ *  `LayerGroup.children`) bottom-to-top into a single `vec3<f32>` composite
+ *  expression, recursing into any nested group exactly like `glsl-es.ts`'s
+ *  `foldStack` (same structure, WGSL syntax) — see `LayerGroup`'s own doc
+ *  comment in `src/model/document.ts`. `enabled`/`soloed` are scoped to THIS
+ *  sibling array only. Mask graphs are not composited here, matching this
+ *  backend's pre-existing gap for leaf layers (`ShaderLayer.maskGraph` is not
+ *  wired into WGSL compositing either) — not something this task adds. */
+function foldStack(
+  nodes: StackNode[],
+  handle: EmitSinkHandle,
+  registry: NodeRegistry,
+  subGraphs: ShaderDocument['subGraphs'],
+  relativeSourceMap: Array<{ line: number; nodeId: string }>,
+): string {
+  const soloed = nodes.filter((n) => n.soloed);
+  const participating = soloed.length > 0 ? soloed : nodes.filter((n) => n.enabled);
+
+  let compositeVar = 'vec3<f32>(0.0)';
+
+  for (const node of participating) {
+    let layerColor: string;
+    if (node.kind === 'group') {
+      const localComposite = foldStack(node.children, handle, registry, subGraphs, relativeSourceMap);
+      layerColor = `vec4<f32>(${localComposite}, 1.0)`;
+    } else {
+      const bodyOffset = handle.body.length;
+      const result = lowerGraph(node.graph, registry, HOOKS, handle.sink, subGraphs);
+      for (const entry of result.sourceMap) {
+        relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
+      }
+      layerColor = result.outputExpr ?? '';
+      if (result.outputExpr === undefined) {
+        handle.sink.diag({
+          level: 'error',
+          message: `Layer "${node.name}" (${node.id}) produced no output; compositing a placeholder instead.`,
+        });
+        layerColor = 'vec4<f32>(1.0, 0.0, 1.0, 1.0)';
+      }
+    }
+
+    const blendFn = blendFunctionName(node.blend, handle.sink.diag);
+    const opacityUniform = handle.sink.uniform({
+      name: layerOpacityUniformName(node.id),
+      type: 'float',
+      paramId: 'opacity',
+      default: node.opacity,
+    });
+    const v = handle.sink.temp('layerComposite');
+    handle.sink.emit(`let ${v}: vec3<f32> = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityUniform});`);
+    compositeVar = v;
+  }
+
+  return compositeVar;
+}
+
 function compileDocument(
   doc: ShaderDocument,
   opts?: CompileOptions,
   registry: NodeRegistry = defaultRegistry,
 ): CompiledProgram {
   if (opts?.previewNodeId) {
-    const owner = doc.layerStack.layers.find((l) =>
-      l.graph.nodes.some((n) => n.id === opts.previewNodeId),
-    );
+    const owner = findLayerOwningNode(doc.layerStack.layers, opts.previewNodeId);
     if (!owner) {
       return {
         target: 'wgsl',
@@ -399,7 +452,7 @@ function compileDocument(
   }
 
   if (opts?.previewLayerId) {
-    const layer = doc.layerStack.layers.find((l) => l.id === opts.previewLayerId);
+    const layer = findLayer(doc.layerStack.layers, opts.previewLayerId);
     if (!layer) {
       return {
         target: 'wgsl',
@@ -417,38 +470,9 @@ function compileDocument(
     return compileGraph(layer.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
   }
 
-  const soloed = doc.layerStack.layers.filter((l) => l.soloed);
-  const participating = soloed.length > 0 ? soloed : doc.layerStack.layers.filter((l) => l.enabled);
-
   const handle = createEmitSink();
-  let compositeVar = 'vec3<f32>(0.0)';
   const relativeSourceMap: Array<{ line: number; nodeId: string }> = [];
-
-  for (const layer of participating) {
-    const bodyOffset = handle.body.length;
-    const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink, doc.subGraphs);
-    for (const entry of result.sourceMap) {
-      relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
-    }
-    let layerColor = result.outputExpr;
-    if (layerColor === undefined) {
-      handle.sink.diag({
-        level: 'error',
-        message: `Layer "${layer.name}" (${layer.id}) produced no output; compositing a placeholder instead.`,
-      });
-      layerColor = 'vec4<f32>(1.0, 0.0, 1.0, 1.0)';
-    }
-    const blendFn = blendFunctionName(layer.blend, handle.sink.diag);
-    const opacityUniform = handle.sink.uniform({
-      name: layerOpacityUniformName(layer.id),
-      type: 'float',
-      paramId: 'opacity',
-      default: layer.opacity,
-    });
-    const v = handle.sink.temp('layerComposite');
-    handle.sink.emit(`let ${v}: vec3<f32> = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityUniform});`);
-    compositeVar = v;
-  }
+  const compositeVar = foldStack(doc.layerStack.layers, handle, registry, doc.subGraphs, relativeSourceMap);
 
   handle.sink.emit(`return vec4<f32>(${compositeVar}, 1.0);`);
 

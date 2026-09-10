@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptyDocument, type ShaderDocument } from '../model/document';
+import { emptyDocument, type ShaderDocument, type ShaderLayer } from '../model/document';
 import { emptyLayer } from '../model/factory';
 import {
   collectUniformValues,
@@ -10,10 +10,16 @@ import {
   topologySignature,
 } from './topology';
 
+/** Every fixture document here is a bare `emptyDocument()` with no groups —
+ *  its sole top-level stack node is always a leaf. */
+function layer0(doc: ShaderDocument): ShaderLayer {
+  return doc.layerStack.layers[0] as ShaderLayer;
+}
+
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 function docWithOneParamNode(): ShaderDocument {
   const doc = emptyDocument('Topology fixture');
-  const layer = doc.layerStack.layers[0];
+  const layer = layer0(doc);
   layer.graph.nodes.unshift({
     id: 'fbm1',
     type: 'noise.fbm',
@@ -48,7 +54,7 @@ describe('topologySignature', () => {
   it('does NOT change when a node param value changes', () => {
     const before = docWithOneParamNode();
     const after = clone(before);
-    after.layerStack.layers[0].graph.nodes[0].params[0].value = 30;
+    layer0(after).graph.nodes[0].params[0].value = 30;
     expect(sig(before)).toBe(sig(after));
   });
 
@@ -62,16 +68,16 @@ describe('topologySignature', () => {
   it('does NOT change on node position, previewEnabled, or collapsed edits', () => {
     const before = docWithOneParamNode();
     const after = clone(before);
-    after.layerStack.layers[0].graph.nodes[0].position = { x: 999, y: 999 };
-    after.layerStack.layers[0].graph.nodes[0].previewEnabled = true;
-    after.layerStack.layers[0].graph.nodes[0].collapsed = true;
+    layer0(after).graph.nodes[0].position = { x: 999, y: 999 };
+    layer0(after).graph.nodes[0].previewEnabled = true;
+    layer0(after).graph.nodes[0].collapsed = true;
     expect(sig(before)).toBe(sig(after));
   });
 
   it('changes when a node is added', () => {
     const before = docWithOneParamNode();
     const after = clone(before);
-    after.layerStack.layers[0].graph.nodes.push({
+    layer0(after).graph.nodes.push({
       id: 'extra',
       type: 'math.add',
       position: { x: 0, y: 0 },
@@ -83,7 +89,7 @@ describe('topologySignature', () => {
   it('changes when an edge connects two nodes', () => {
     const before = docWithOneParamNode();
     const after = clone(before);
-    after.layerStack.layers[0].graph.edges.push({
+    layer0(after).graph.edges.push({
       id: 'fbm1:value->output:baseColor',
       source: { node: 'fbm1', socket: 'value' },
       target: { node: 'output', socket: 'baseColor' },
@@ -94,7 +100,7 @@ describe('topologySignature', () => {
   it('changes when a node is bypassed', () => {
     const before = docWithOneParamNode();
     const after = clone(before);
-    after.layerStack.layers[0].graph.nodes[0].bypassed = true;
+    layer0(after).graph.nodes[0].bypassed = true;
     expect(sig(before)).not.toBe(sig(after));
   });
 
@@ -146,11 +152,11 @@ describe('topologySignature', () => {
 
   it('is unaffected by node/edge array order (only structural presence matters)', () => {
     const a = docWithOneParamNode();
-    a.layerStack.layers[0].graph.nodes.push({ id: 'z', type: 'math.add', position: { x: 0, y: 0 }, params: [] });
-    a.layerStack.layers[0].graph.nodes.push({ id: 'a', type: 'math.add', position: { x: 0, y: 0 }, params: [] });
+    layer0(a).graph.nodes.push({ id: 'z', type: 'math.add', position: { x: 0, y: 0 }, params: [] });
+    layer0(a).graph.nodes.push({ id: 'a', type: 'math.add', position: { x: 0, y: 0 }, params: [] });
 
     const b = clone(a);
-    b.layerStack.layers[0].graph.nodes.reverse();
+    layer0(b).graph.nodes.reverse();
 
     expect(sig(a)).toBe(sig(b));
   });

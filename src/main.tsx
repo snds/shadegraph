@@ -2,27 +2,21 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './ui/App';
 import './ui/app.css';
-import { SettingsRoot } from './ui/settings/SettingsRoot';
-import { AssetBrowserPanel } from './ui/assets/AssetBrowserPanel';
 import { PerfRoot } from './ui/perf/PerfRoot';
-import { CritiqueRoot } from './ui/critique/CritiqueRoot';
-import { ManifestRoot } from './ui/manifest/ManifestRoot';
 
-// `SettingsRoot`, `AssetBrowserPanel`, `PerfRoot`, `CritiqueRoot`, and
-// `ManifestRoot` are each self-contained panes (their own toggle + overlay)
-// added as siblings of `<App />` rather than inside it: their tasks are
-// explicitly scoped away from `App.tsx` and every other existing `src/ui/`
-// file, so each can run in the same shared working tree as a concurrent,
-// disjoint task without either one touching a file the other might also
-// need. This is the one line per pane that makes it reachable; each panel
-// owns everything else about how it renders.
+// Settings, the asset browser, the project manifest, and reference critique
+// used to each be a self-contained sibling pane here (their own fixed-position
+// toggle + overlay). They're now absorbed into the shell's pivot rail /
+// bottom dock (`src/ui/shell/`, mounted from inside `<App />`) — see
+// `pivotItems.tsx` and `SettingsDock.tsx`.
+//
+// `PerfRoot` stays exactly as it was: the performance budget panel is
+// explicitly out of scope for the pivot rail (it becomes a top-panel control
+// in a separate task), so it keeps the same self-contained toggle+overlay
+// pattern as a sibling of `<App />`.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
-    <SettingsRoot />
-    <AssetBrowserPanel />
     <PerfRoot />
-    <CritiqueRoot />
-    <ManifestRoot />
   </StrictMode>,
 );

@@ -20,6 +20,7 @@
 import { useEffect, useState } from 'react';
 
 import type { ShaderLayer } from '../../model/document';
+import { isLayerNode } from '../../model/layerTree';
 import { activeLayerId, useEditorStore } from '../store';
 import { BLEND_MODES, BLEND_MODE_LABELS, isBlendMode } from './blendModes';
 import { canMoveLayer, topFirst, type StackDirection } from './reorder';
@@ -29,7 +30,13 @@ import './layers.css';
 const pct = (opacity: number) => Math.round(opacity * 100);
 
 export function LayerStack() {
-  const layers = useEditorStore((s) => s.doc.layerStack.layers);
+  // Layer groups (`LayerGroup` in `src/model/document.ts`) exist in the model
+  // and compiler now, but this panel still renders the TOP-LEVEL stack flat,
+  // leaf layers only — the nested-tree UI (folders you can expand/drag into)
+  // is a separate follow-on task. A top-level group is simply invisible here
+  // for now, same as any other not-yet-built affordance.
+  const allTopLevel = useEditorStore((s) => s.doc.layerStack.layers);
+  const layers = allTopLevel.filter(isLayerNode);
   const activeId = useEditorStore((s) => activeLayerId(s.doc));
   const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
   const setLayerProp = useEditorStore((s) => s.setLayerProp);
@@ -102,7 +109,7 @@ interface LayerRowProps {
   canMoveDown: boolean;
   onlyLayer: boolean;
   onActivate: (id: string) => void;
-  onPatch: (id: string, patch: Partial<Omit<ShaderLayer, 'id' | 'graph'>>) => void;
+  onPatch: (id: string, patch: Partial<Omit<ShaderLayer, 'id' | 'graph' | 'kind'>>) => void;
   onMove: (id: string, direction: StackDirection) => void;
   onRemove: (id: string) => void;
   /** Whether the canvas is currently dived into THIS layer's mask graph. */

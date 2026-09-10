@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyDocument, type NodeParam, type ShaderDocument } from '../model/document';
+import { emptyDocument, type NodeParam, type ShaderDocument, type ShaderLayer } from '../model/document';
 import type { MeasureFn } from './runBudget';
 import { runPerformanceBudget } from './runBudget';
 
 function withParam(doc: ShaderDocument, param: NodeParam): ShaderDocument {
-  const [layer] = doc.layerStack.layers;
+  const [layer] = doc.layerStack.layers as ShaderLayer[];
   const [node] = layer.graph.nodes;
   return {
     ...doc,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import { findLayer } from '../model/layerTree';
 import { deserialize, serialize } from '../model/serialize';
 import { nodes, type NodeDefinition } from '../nodes/registry';
 import { activeGraph, activeLayer, useEditorStore } from './store';
@@ -276,8 +277,8 @@ describe('layers', () => {
     add('test.noise');
 
     const layers = store().doc.layerStack.layers;
-    const baseGraph = layers.find((l) => l.id === base)?.graph;
-    const crustGraph = layers.find((l) => l.id === second)?.graph;
+    const baseGraph = findLayer(layers, base)?.graph;
+    const crustGraph = second ? findLayer(layers, second)?.graph : undefined;
 
     expect(baseGraph?.nodes.map((n) => n.type)).toEqual(['output.surface', 'test.uv']);
     expect(crustGraph?.nodes.map((n) => n.type)).toEqual(['output.surface', 'test.noise']);
@@ -346,6 +347,103 @@ describe('layers', () => {
     store().reorderLayer(base, 'down');
     expect(store().doc).toBe(before);
     expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, top]);
+  });
+});
+
+describe('layer groups', () => {
+  it('groupLayers wraps contiguous siblings, preserving their order and position', () => {
+    const base = activeLayer(store().doc).id;
+    const middle = store().addLayer('Middle') as string;
+    const top = store().addLayer('Top') as string;
+    // `layers` array (bottom-to-top): [base, middle, top].
+
+    const groupId = store().groupLayers([middle, top]);
+    expect(groupId).not.toBeNull();
+
+    const layers = store().doc.layerStack.layers;
+    expect(layers.map((l) => l.id)).toEqual([base, groupId]);
+    const group = layers[1];
+    expect(group.kind).toBe('group');
+    expect(group.kind === 'group' && group.children.map((c) => c.id)).toEqual([middle, top]);
+  });
+
+  it('groupLayers then ungroupLayer restores the original flat order (contiguous selection)', () => {
+    const base = activeLayer(store().doc).id;
+    const middle = store().addLayer('Middle') as string;
+    const top = store().addLayer('Top') as string;
+    const before = store().doc.layerStack.layers.map((l) => l.id);
+
+    const groupId = store().groupLayers([middle, top]) as string;
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, groupId]);
+
+    store().ungroupLayer(groupId);
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual(before);
+  });
+
+  it('fails with lastError when the selection is not all siblings at the same level', () => {
+    const base = activeLayer(store().doc).id;
+    const middle = store().addLayer('Middle') as string;
+    const top = store().addLayer('Top') as string;
+
+    const innerGroupId = store().groupLayers([middle, top]) as string;
+    expect(innerGroupId).not.toBeNull();
+
+    // `base` is a root-level sibling; `middle` now lives inside the group —
+    // they are not siblings of each other.
+    const result = store().groupLayers([base, middle]);
+    expect(result).toBeNull();
+    expect(store().lastError).toMatch(/siblings/);
+  });
+
+  it('addNode/setActiveLayer resolve a leaf layer nested inside a group', () => {
+    const base = activeLayer(store().doc).id;
+    const middle = store().addLayer('Middle') as string;
+    store().setActiveLayer(base);
+    const groupId = store().groupLayers([middle]) as string;
+    expect(groupId).not.toBeNull();
+
+    // The nested leaf layer is still directly addressable.
+    store().setActiveLayer(middle);
+    expect(activeLayer(store().doc).id).toBe(middle);
+    const node = add('test.uv');
+    const layers = store().doc.layerStack.layers;
+    const nested = findLayer(layers, middle);
+    expect(nested?.graph.nodes.map((n) => n.id)).toContain(node);
+  });
+
+  it('reorderLayer only reshuffles within the group a node lives in', () => {
+    const base = activeLayer(store().doc).id;
+    const a = store().addLayer('A') as string;
+    const b = store().addLayer('B') as string;
+    const groupId = store().groupLayers([a, b]) as string;
+
+    store().reorderLayer(a, 'up');
+
+    const layers = store().doc.layerStack.layers;
+    expect(layers.map((l) => l.id)).toEqual([base, groupId]);
+    const group = layers[1];
+    expect(group.kind === 'group' && group.children.map((c) => c.id)).toEqual([b, a]);
+  });
+
+  it('removeLayer refuses to remove a group that holds every remaining leaf layer', () => {
+    const base = activeLayer(store().doc).id;
+    const groupId = store().groupLayers([base]) as string;
+    expect(groupId).not.toBeNull();
+
+    store().removeLayer(groupId);
+    expect(store().lastError).toMatch(/at least one layer/);
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([groupId]);
+  });
+
+  it('setLayerProp patches a group exactly like a layer (blend/opacity/name)', () => {
+    const base = activeLayer(store().doc).id;
+    const second = store().addLayer('Second') as string;
+    const groupId = store().groupLayers([base, second]) as string;
+
+    store().setLayerProp(groupId, { name: 'Combined', opacity: 0.4, blend: 'screen' });
+
+    const group = store().doc.layerStack.layers.find((l) => l.id === groupId);
+    expect(group).toMatchObject({ name: 'Combined', opacity: 0.4, blend: 'screen' });
   });
 });
 

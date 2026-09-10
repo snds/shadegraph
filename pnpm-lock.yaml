@@ -11,6 +11,9 @@ importers:
       '@xyflow/react':
         specifier: ^12.3.0
         version: 12.11.6(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      material-symbols:
+        specifier: ^0.47.2
+        version: 0.47.2
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -847,6 +850,9 @@ packages:
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
+
+  material-symbols@0.47.2:
+    resolution: {integrity: sha512-+IWfgccIy3A7OFX+2LzI9LNXCkg3m8h+FhuNyNNOdL+uOQxw8zaP2nsuj2MOQmapND8OnmlHZ1XWrQFc4/9ZKw==}
 
   meshoptimizer@0.18.1:
     resolution: {integrity: sha512-ZhoIoL7TNV4s5B6+rx5mC//fw8/POGyNxS/DZyCJeiZ12ScLfVwRE/GfsxwiTkMYYD5DmK2/JXnEVXqL4rF+Sw==}
@@ -1782,6 +1788,8 @@ snapshots:
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  material-symbols@0.47.2: {}
 
   meshoptimizer@0.18.1: {}
 

@@ -1,36 +1,35 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// ShadeGraph — Settings panel mount point
+// ShadeGraph — Settings, bottom-docked in the pivot rail
 // ───────────────────────────────────────────────────────────────────────────
-// Phase 4 scope explicitly keeps this task off `App.tsx` and every other
-// existing `src/ui/` file (a parallel Phase 4 task touches a disjoint file
-// set in the same shared working tree). `SettingsRoot` is therefore fully
-// self-contained: a small fixed-position toggle button plus the panel it
-// reveals, mountable by adding ONE sibling element next to `<App />` — no
-// existing file's internals need to change for the panel to become reachable.
-//
-// Props-free, same "reads its own state, renders exactly one root element"
-// contract other panes use (see `DocToolbar`/`MainViewer`).
+// NOT a pivot item — Settings lives in the rail's bottom dock, separate from
+// the Layers/Assets/Nodes/Manifest/Critique list (see `PivotRail.tsx`).
+// Reuses the real `SettingsPanel` unchanged; only the chrome around it is
+// new. Same self-contained "own toggle + own overlay" shape the old
+// `SettingsRoot.tsx` used, just relocated into the rail's dock instead of a
+// fixed-position corner button, and using the shared `Icon` component.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState } from 'react';
 
-import { SettingsPanel } from './SettingsPanel';
-import './settings.css';
+import { SettingsPanel } from '../settings/SettingsPanel';
+import '../settings/settings.css';
+import { Icon } from './Icon';
 
-export function SettingsRoot() {
+export function SettingsDock({ collapsed }: { collapsed: boolean }) {
   const [open, setOpen] = useState(false);
 
   return (
     <>
       <button
         type="button"
-        className="sg-settings__toggle"
+        className="sg-rail__dock-item"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label="Project settings"
         title="Project settings"
       >
-        ⚙
+        <Icon name="settings" />
+        {!collapsed && <span className="sg-rail__label">Settings</span>}
       </button>
       {open && (
         <div className="sg-settings__overlay" role="dialog" aria-label="Project settings">
@@ -41,7 +40,7 @@ export function SettingsRoot() {
               onClick={() => setOpen(false)}
               aria-label="Close project settings"
             >
-              ✕
+              <Icon name="close" title="Close" />
             </button>
             <SettingsPanel />
           </div>

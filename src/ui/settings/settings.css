@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    ShadeGraph — settings panel styles
-   Owned by SettingsRoot.tsx/SettingsPanel.tsx and imported from them.
+   Owned by SettingsPanel.tsx and shell/SettingsDock.tsx and imported from them.
    References the shared tokens from `app.css` (--sg-*), never raw hex, same
    discipline as `toolbar.css`/`layers.css`.
 
@@ -23,22 +23,10 @@
 }
 .sg-linkbtn:hover { color: #fff; }
 
-.sg-settings__toggle {
-  position: fixed;
-  top: 8px;
-  right: 12px;
-  z-index: 40;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--sg-radius);
-  border: 1px solid var(--sg-line);
-  background: var(--sg-panel);
-  color: var(--sg-text);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-}
-.sg-settings__toggle:hover { border-color: var(--sg-accent); }
+/* The old fixed-position gear toggle (`.sg-settings__toggle`, owned by the
+   now-deleted `SettingsRoot.tsx`) is gone — Settings opens from the shell's
+   pivot rail bottom dock instead (`src/ui/shell/SettingsDock.tsx`), which
+   still reuses `__overlay`/`__dialog`/`__close` below. */
 
 .sg-settings__overlay {
   position: fixed;

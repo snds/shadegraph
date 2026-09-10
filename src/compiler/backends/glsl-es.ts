@@ -21,8 +21,10 @@ import type {
   ShaderDocument,
   ShaderGraph,
   SocketType,
+  StackNode,
 } from '../../model/document';
 import { sanitizeIdent } from '../../model/ids';
+import { findLayer, findLayerOwningNode } from '../../model/layerTree';
 import { nodes as defaultRegistry, type NodeRegistry } from '../../nodes/registry';
 import {
   backends,
@@ -31,7 +33,7 @@ import {
   type Diagnostic,
   type ShaderBackend,
 } from '../backend';
-import { createEmitSink, lowerGraph, type LowerHooks } from '../lower';
+import { createEmitSink, lowerGraph, type EmitSinkHandle, type LowerHooks } from '../lower';
 
 // A layer's opacity is a dial, not a topology choice — it must drive a
 // uniform (see `paramUniform` in `nodes/definitions/helpers.ts` for the
@@ -402,6 +404,88 @@ function compileGraph(
   };
 }
 
+/** Folds one sibling array of the layer-stack tree (the document root, or one
+ *  `LayerGroup.children`) bottom-to-top into a single `vec3` composite
+ *  expression, recursing into any nested group EXACTLY the same way before
+ *  treating its folded result as one blend contribution to its own parent —
+ *  see `LayerGroup`'s own doc comment in `src/model/document.ts`. `enabled`/
+ *  `soloed` are scoped to THIS sibling array only (soloing something inside a
+ *  group never mutes anything outside it), mirroring
+ *  `document.ts`: "when any layer is soloed, only soloed layers composite". */
+function foldStack(
+  nodes: StackNode[],
+  handle: EmitSinkHandle,
+  registry: NodeRegistry,
+  subGraphs: ShaderDocument['subGraphs'],
+  relativeSourceMap: Array<{ line: number; nodeId: string }>,
+): string {
+  const soloed = nodes.filter((n) => n.soloed);
+  const participating = soloed.length > 0 ? soloed : nodes.filter((n) => n.enabled);
+
+  let compositeVar = 'vec3(0.0)';
+
+  for (const node of participating) {
+    let layerColor: string;
+    if (node.kind === 'group') {
+      const localComposite = foldStack(node.children, handle, registry, subGraphs, relativeSourceMap);
+      layerColor = `vec4(${localComposite}, 1.0)`;
+    } else {
+      const bodyOffset = handle.body.length;
+      const result = lowerGraph(node.graph, registry, HOOKS, handle.sink, subGraphs);
+      for (const entry of result.sourceMap) {
+        relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
+      }
+      layerColor = result.outputExpr ?? '';
+      if (result.outputExpr === undefined) {
+        handle.sink.diag({
+          level: 'error',
+          message: `Layer "${node.name}" (${node.id}) produced no output; compositing a placeholder instead.`,
+        });
+        layerColor = 'vec4(1.0, 0.0, 1.0, 1.0)';
+      }
+    }
+
+    const blendFn = blendFunctionName(node.blend, handle.sink.diag);
+    const opacityUniform = handle.sink.uniform({
+      name: layerOpacityUniformName(node.id),
+      type: 'float',
+      paramId: 'opacity',
+      default: node.opacity,
+    });
+
+    // A mask graph is compiled through the same `lowerGraph` path as the
+    // node's own graph (sharing `handle.sink`, so its uniforms/temps/prelude
+    // dedup exactly like any other node), terminating at its `output.mask`
+    // node instead of `output.surface`. Its float result multiplies into the
+    // opacity term passed to the blend function — a per-pixel modulation,
+    // not a flat scalar, unlike the opacity uniform alone. Applies identically
+    // to a group's own `maskGraph` — it masks the group's ALREADY-folded
+    // local composite, not any one child.
+    let opacityExpr = opacityUniform;
+    if (node.maskGraph) {
+      const maskBodyOffset = handle.body.length;
+      const maskResult = lowerGraph(node.maskGraph, registry, HOOKS, handle.sink, subGraphs);
+      for (const entry of maskResult.sourceMap) {
+        relativeSourceMap.push({ line: maskBodyOffset + entry.line, nodeId: entry.nodeId });
+      }
+      if (maskResult.outputExpr === undefined) {
+        handle.sink.diag({
+          level: 'error',
+          message: `Layer "${node.name}" (${node.id})'s mask graph produced no output; ignoring the mask for this layer.`,
+        });
+      } else {
+        opacityExpr = `(${opacityUniform} * ${maskResult.outputExpr})`;
+      }
+    }
+
+    const v = handle.sink.temp('layerComposite');
+    handle.sink.emit(`vec3 ${v} = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityExpr});`);
+    compositeVar = v;
+  }
+
+  return compositeVar;
+}
+
 /** Compiles the whole document: every participating layer's graph, composited
  *  bottom-to-top with its own blend mode + opacity against an implicit black
  *  canvas beneath the stack. `enabled`/`soloed` follow the model's own
@@ -419,9 +503,7 @@ function compileDocument(
     // deeper. Was previously unhandled here (only `compileGraph` honored
     // `previewNodeId`), so soloing a node to the main viewer silently fell
     // through to the full composite instead of showing that node's output.
-    const owner = doc.layerStack.layers.find((l) =>
-      l.graph.nodes.some((n) => n.id === opts.previewNodeId),
-    );
+    const owner = findLayerOwningNode(doc.layerStack.layers, opts.previewNodeId);
     if (!owner) {
       return {
         target: 'glsl-es',
@@ -440,7 +522,7 @@ function compileDocument(
   }
 
   if (opts?.previewLayerId) {
-    const layer = doc.layerStack.layers.find((l) => l.id === opts.previewLayerId);
+    const layer = findLayer(doc.layerStack.layers, opts.previewLayerId);
     if (!layer) {
       return {
         target: 'glsl-es',
@@ -461,62 +543,9 @@ function compileDocument(
     return compileGraph(layer.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
   }
 
-  const soloed = doc.layerStack.layers.filter((l) => l.soloed);
-  const participating = soloed.length > 0 ? soloed : doc.layerStack.layers.filter((l) => l.enabled);
-
   const handle = createEmitSink();
-  let compositeVar = 'vec3(0.0)';
   const relativeSourceMap: Array<{ line: number; nodeId: string }> = [];
-
-  for (const layer of participating) {
-    const bodyOffset = handle.body.length;
-    const result = lowerGraph(layer.graph, registry, HOOKS, handle.sink, doc.subGraphs);
-    for (const entry of result.sourceMap) {
-      relativeSourceMap.push({ line: bodyOffset + entry.line, nodeId: entry.nodeId });
-    }
-    let layerColor = result.outputExpr;
-    if (layerColor === undefined) {
-      handle.sink.diag({
-        level: 'error',
-        message: `Layer "${layer.name}" (${layer.id}) produced no output; compositing a placeholder instead.`,
-      });
-      layerColor = 'vec4(1.0, 0.0, 1.0, 1.0)';
-    }
-    const blendFn = blendFunctionName(layer.blend, handle.sink.diag);
-    const opacityUniform = handle.sink.uniform({
-      name: layerOpacityUniformName(layer.id),
-      type: 'float',
-      paramId: 'opacity',
-      default: layer.opacity,
-    });
-
-    // A mask graph is compiled through the same `lowerGraph` path as the
-    // layer's own graph (sharing `handle.sink`, so its uniforms/temps/prelude
-    // dedup exactly like any other node), terminating at its `output.mask`
-    // node instead of `output.surface`. Its float result multiplies into the
-    // opacity term passed to the blend function — a per-pixel modulation,
-    // not a flat scalar, unlike the opacity uniform alone.
-    let opacityExpr = opacityUniform;
-    if (layer.maskGraph) {
-      const maskBodyOffset = handle.body.length;
-      const maskResult = lowerGraph(layer.maskGraph, registry, HOOKS, handle.sink, doc.subGraphs);
-      for (const entry of maskResult.sourceMap) {
-        relativeSourceMap.push({ line: maskBodyOffset + entry.line, nodeId: entry.nodeId });
-      }
-      if (maskResult.outputExpr === undefined) {
-        handle.sink.diag({
-          level: 'error',
-          message: `Layer "${layer.name}" (${layer.id})'s mask graph produced no output; ignoring the mask for this layer.`,
-        });
-      } else {
-        opacityExpr = `(${opacityUniform} * ${maskResult.outputExpr})`;
-      }
-    }
-
-    const v = handle.sink.temp('layerComposite');
-    handle.sink.emit(`vec3 ${v} = ${blendFn}(${compositeVar}, (${layerColor}), ${opacityExpr});`);
-    compositeVar = v;
-  }
+  const compositeVar = foldStack(doc.layerStack.layers, handle, registry, doc.subGraphs, relativeSourceMap);
 
   handle.sink.emit(`gl_FragColor = vec4(${compositeVar}, 1.0);`);
 

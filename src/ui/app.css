@@ -37,11 +37,17 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 .sg-hint { color: var(--sg-dim); font-size: 11px; }
 .sg-hint--pending { margin-left: auto; font-style: italic; }
 
-/* ── Body grid ───────────────────────────────────────────────────────────── */
-.sg-body { flex: 1; display: grid; grid-template-columns: 220px 1fr 300px; min-height: 0; }
+/* ── Body layout ─────────────────────────────────────────────────────────── */
+/* Flex row, not a fixed grid: the pivot rail and panel host (`src/ui/shell/`)
+   each size themselves via their own CSS (rail collapses to icon-only,
+   panel host is a fixed track) rather than this container dictating column
+   widths — that's what let the rail collapse without this file changing. */
+.sg-body { flex: 1; display: flex; min-height: 0; }
 .sg-layers, .sg-inspector { background: var(--sg-panel); padding: 10px; overflow: auto; min-width: 0; }
-.sg-layers { border-right: 1px solid var(--sg-line); }
-.sg-inspector { border-left: 1px solid var(--sg-line); }
+/* `.sg-layers` fills whatever hosts it now (the shell's panel host) instead
+   of being a direct, self-bordered grid column. */
+.sg-layers { width: 100%; height: 100%; }
+.sg-inspector { flex: 0 0 300px; border-left: 1px solid var(--sg-line); }
 
 .sg-pane__title {
   margin: 0 0 8px; font-size: 11px; font-weight: 600;
@@ -64,7 +70,7 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 .sg-inspector__params li { display: flex; justify-content: space-between; gap: 8px; }
 
 /* ── Graph canvas ────────────────────────────────────────────────────────── */
-.sg-graph { position: relative; min-width: 0; background: var(--sg-bg); }
+.sg-graph { flex: 1; position: relative; min-width: 0; background: var(--sg-bg); }
 .sg-graph .react-flow { width: 100%; height: 100%; }
 
 .sg-graph__toolbar { display: flex; align-items: center; gap: 10px; }

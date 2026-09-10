@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { emptyDocument } from '../../model/document';
+import { emptyDocument, type ShaderLayer } from '../../model/document';
 import { emptyLayer } from '../../model/factory';
 import {
   arrayStep,
@@ -167,9 +167,9 @@ describe('reorderedDocument', () => {
 
   it('keeps each layer graph attached to its own layer', () => {
     const before = doc3();
-    const target = before.layerStack.layers[2];
+    const target = before.layerStack.layers[2] as ShaderLayer;
     const after = reorderedDocument(before, target.id, 'down')!;
-    expect(after.layerStack.layers.find((l) => l.id === target.id)!.graph).toBe(target.graph);
+    expect((after.layerStack.layers.find((l) => l.id === target.id) as ShaderLayer).graph).toBe(target.graph);
   });
 
   it('stamps meta.updated, because a reorder is an edit', () => {

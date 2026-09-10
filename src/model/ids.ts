@@ -38,6 +38,13 @@ export function makeLayerId(): string {
   return `layer_${suffix()}`;
 }
 
+/** Unique id for a new layer GROUP (folder) — see `LayerGroup` in
+ *  `src/model/document.ts`. Distinct prefix from `makeLayerId` so a saved
+ *  document's ids alone hint at which kind of stack node they name. */
+export function makeLayerGroupId(): string {
+  return `layergroup_${suffix()}`;
+}
+
 /** Unique id for a new document. */
 export function makeDocumentId(): string {
   return `doc_${suffix()}`;

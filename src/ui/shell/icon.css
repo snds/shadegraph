@@ -1,0 +1,23 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — shared icon font
+   Self-hosted Material Symbols (npm `material-symbols` package): this
+   `@import` pulls the `@font-face` + ligature-class rule and, transitively
+   through Vite's CSS asset handling, the `.woff2` file itself — no
+   fonts.googleapis.com request at runtime.
+   Only "outlined" is imported (and the only variant `Icon.tsx` needs to
+   support right now) — each unused variant's `.woff2` is ~4-5MB and Vite
+   bundles whatever a CSS `@font-face url()` references whether or not
+   anything ends up using it, so import `material-symbols/rounded.css`/
+   `sharp.css` here too ONLY once something actually renders with that
+   variant, not speculatively.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@import 'material-symbols/outlined.css';
+
+.sg-icon {
+  font-size: 18px;
+  line-height: 1;
+  vertical-align: middle;
+  user-select: none;
+  flex: none;
+}
