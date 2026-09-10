@@ -266,6 +266,13 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 .sg-viewer {
   background: #000;
   color: var(--sg-dim); font-size: 11px; display: grid; place-items: center;
+  /* Inset the rendered canvas from the pane's edges, matching the 12px
+     panel-inset convention used by `.sg-inspector`/`.sg-layers` elsewhere.
+     Safe as pure box-model padding: `MainViewer.tsx`'s ResizeObserver
+     observes this element and reads `entry.contentRect`, which is already
+     padding-exclusive per spec, so the canvas backing store sizes to the
+     padded content box on its own — no JS/renderer change needed. */
+  padding: 12px;
 }
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
