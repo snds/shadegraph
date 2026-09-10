@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createAssetStore, flattenVisibleTree, type AssetStoreDeps } from './assetStore';
 import type { PreviewUrlManager } from './previewUrls';
-import type { AssetEntry, DirectoryReader, HandleStore } from './types';
+import type { AssetEntry, DirectoryReader, HandleStore, StoredAssetRoot } from './types';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 // Fakes for every dependency `assetStore.ts` takes by injection — no real
@@ -26,17 +26,20 @@ function fakeHandle(
   } as unknown as FileSystemDirectoryHandle;
 }
 
-function fakeHandleStore(initial?: FileSystemDirectoryHandle): HandleStore {
-  let stored = initial;
+function fakeHandleStore(initial: StoredAssetRoot[] = []): HandleStore {
+  const stored = new Map(initial.map((entry) => [entry.id, entry.handle]));
   return {
-    async save(handle) {
-      stored = handle;
+    async save(id, handle) {
+      stored.set(id, handle);
     },
-    async load() {
-      return stored;
+    async loadAll() {
+      return Array.from(stored.entries()).map(([id, handle]) => ({ id, handle }));
+    },
+    async remove(id) {
+      stored.delete(id);
     },
     async clear() {
-      stored = undefined;
+      stored.clear();
     },
   };
 }
@@ -45,7 +48,7 @@ const fakeBlob = {} as Blob;
 
 /** A fixture-backed `DirectoryReader`: `fixture` maps a joined path (`''` for
  *  the root) to that folder's entries. Records call counts so tests can
- *  assert lazy (not eager) listing. `textFixture` maps a joined path to that
+ *  assert which paths got listed. `textFixture` maps a joined path to that
  *  file's text, for `readText`/recognition tests. */
 function fixtureReader(
   fixture: Record<string, AssetEntry[]>,
@@ -128,11 +131,11 @@ describe('createAssetStore — connect / disconnect', () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
-    const state = store.getState();
-    expect(state.status).toBe('connected');
-    expect(state.rootName).toBe('assets');
-    expect(state.rootIds).toHaveLength(2);
-    expect(flattenVisibleTree(state.nodesById, state.rootIds).map((n) => n.name).sort()).toEqual([
+    const root = store.getState().roots[0];
+    expect(root.status).toBe('connected');
+    expect(root.rootName).toBe('assets');
+    expect(root.rootIds).toHaveLength(2);
+    expect(flattenVisibleTree(root.nodesById, root.rootIds).map((n) => n.name).sort()).toEqual([
       'a.png',
       'folder1',
     ]);
@@ -146,56 +149,123 @@ describe('createAssetStore — connect / disconnect', () => {
     });
     const store = createAssetStore(deps);
     await store.getState().connect();
-    expect(store.getState().status).toBe('disconnected');
-    expect(store.getState().error).toBeUndefined();
+    expect(store.getState().roots).toEqual([]);
   });
 
-  it('disconnect() releases every preview URL and clears persisted state', async () => {
+  it('connect() records a real picker failure as a new error root, without touching existing roots', async () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
-    await store.getState().loadPreview('a.png');
+    expect(store.getState().roots).toHaveLength(1);
+    const okRootId = store.getState().roots[0].id;
+
+    deps.pickDirectory = async () => {
+      throw new Error('disk unplugged');
+    };
+    await store.getState().connect();
+
+    const roots = store.getState().roots;
+    expect(roots).toHaveLength(2);
+    expect(roots[0].id).toBe(okRootId);
+    expect(roots[0].status).toBe('connected');
+    expect(roots[1].status).toBe('error');
+    expect(roots[1].error).toBe('disk unplugged');
+  });
+
+  it('connecting a second folder adds a second, independently browsable root', async () => {
+    const secondFixture: Record<string, AssetEntry[]> = { '': [{ name: 'c.mp4', kind: 'file' }] };
+    const secondReader = fixtureReader(secondFixture);
+    let pickCount = 0;
+    const deps = makeDeps({
+      pickDirectory: async () => fakeHandle(pickCount++ === 0 ? 'first' : 'second'),
+      createReader: (handle) => (handle.name === 'second' ? secondReader : fixtureReader(FIXTURE)),
+    });
+    const store = createAssetStore(deps);
+
+    await store.getState().connect();
+    await store.getState().connect();
+
+    const roots = store.getState().roots;
+    expect(roots).toHaveLength(2);
+    expect(roots.map((r) => r.rootName)).toEqual(['first', 'second']);
+    expect(roots[0].status).toBe('connected');
+    expect(roots[1].status).toBe('connected');
+    expect(flattenVisibleTree(roots[1].nodesById, roots[1].rootIds).map((n) => n.name)).toEqual(['c.mp4']);
+  });
+
+  it('disconnect(rootId) releases that root\'s preview URLs and removes only that root', async () => {
+    const deps = makeDeps();
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+    await store.getState().connect(); // two identical-fixture roots
+    const [first, second] = store.getState().roots;
+
+    await store.getState().loadPreview(first.id, 'a.png');
     expect(deps.urlManager.size).toBe(1);
 
-    await store.getState().disconnect();
+    await store.getState().disconnect(first.id);
     expect(deps.urlManager.size).toBe(0);
-    expect(store.getState().status).toBe('disconnected');
-    expect(store.getState().rootIds).toEqual([]);
-    expect(await deps.handleStore.load()).toBeUndefined();
+    const remaining = store.getState().roots;
+    expect(remaining.map((r) => r.id)).toEqual([second.id]);
+    expect(await deps.handleStore.loadAll()).toEqual([{ id: second.id, handle: expect.anything() }]);
   });
 });
 
-describe('createAssetStore — lazy expansion', () => {
-  it('does not list a subfolder until it is expanded', async () => {
+describe('createAssetStore — recursive structural scan at connect', () => {
+  it('lists the whole tree recursively at connect time, not just the top level', async () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
     const reader = deps.createReader(fakeHandle('assets')) as ReturnType<typeof fixtureReader>;
-    // connect() already listed the root once; folder1 must not appear yet.
-    expect(reader.listCalls).toEqual([[]]);
+    expect(reader.listCalls.map((p) => p.join('/')).sort()).toEqual(['', 'folder1']);
 
-    await store.getState().toggleExpand('folder1');
-    expect(reader.listCalls).toEqual([[], ['folder1']]);
-    const state = store.getState();
-    expect(state.nodesById['folder1'].expanded).toBe(true);
-    expect(state.nodesById['folder1/b.txt']).toBeDefined();
+    const root = store.getState().roots[0];
+    expect(root.nodesById['folder1'].childIds).toEqual(['folder1/b.txt']);
+    expect(root.nodesById['folder1/b.txt']).toBeDefined();
   });
 
-  it('collapsing and re-expanding reuses the cached children instead of re-listing', async () => {
+  it('toggleExpand never re-lists once the scan already cached a folder\'s children', async () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
-    await store.getState().toggleExpand('folder1');
+    const rootId = store.getState().roots[0].id;
     const reader = deps.createReader(fakeHandle('assets')) as ReturnType<typeof fixtureReader>;
-    const callsAfterFirstExpand = reader.listCalls.length;
+    const callsAfterConnect = reader.listCalls.length;
 
-    await store.getState().toggleExpand('folder1'); // collapse
-    expect(store.getState().nodesById['folder1'].expanded).toBe(false);
-    expect(store.getState().nodesById['folder1'].childIds).toEqual(['folder1/b.txt']);
+    await store.getState().toggleExpand(rootId, 'folder1');
+    expect(reader.listCalls).toHaveLength(callsAfterConnect);
+    expect(store.getState().roots[0].nodesById['folder1'].expanded).toBe(true);
 
-    await store.getState().toggleExpand('folder1'); // re-expand
-    expect(store.getState().nodesById['folder1'].expanded).toBe(true);
-    expect(reader.listCalls).toHaveLength(callsAfterFirstExpand);
+    await store.getState().toggleExpand(rootId, 'folder1'); // collapse
+    expect(store.getState().roots[0].nodesById['folder1'].expanded).toBe(false);
+    await store.getState().toggleExpand(rootId, 'folder1'); // re-expand
+    expect(store.getState().roots[0].nodesById['folder1'].expanded).toBe(true);
+    expect(reader.listCalls).toHaveLength(callsAfterConnect);
+  });
+
+  it('a subfolder the scan could not list is treated as empty rather than failing the whole connect', async () => {
+    const brokenFixture: Record<string, AssetEntry[]> = {
+      '': [{ name: 'broken', kind: 'folder' }, { name: 'a.png', kind: 'file' }],
+    };
+    const reader: DirectoryReader = {
+      async listEntries(path) {
+        if (path.join('/') === 'broken') throw new Error('permission denied');
+        return brokenFixture[path.join('/')] ?? [];
+      },
+      async openPreview() {
+        return undefined;
+      },
+      async readText() {
+        return undefined;
+      },
+    };
+    const deps = makeDeps({ createReader: () => reader });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    const root = store.getState().roots[0];
+    expect(root.status).toBe('connected');
+    expect(root.nodesById['broken'].childIds).toEqual([]);
   });
 });
 
@@ -204,79 +274,118 @@ describe('createAssetStore — preview lifecycle', () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().loadPreview('a.png');
-    expect(deps.urlManager.acquireCalls).toEqual(['a.png']);
-    expect(store.getState().nodesById['a.png'].preview).toBe('blob:a.png');
-    expect(store.getState().nodesById['a.png'].previewState).toBe('loaded');
+    await store.getState().loadPreview(rootId, 'a.png');
+    expect(deps.urlManager.acquireCalls).toEqual([`${rootId}::a.png`]);
+    expect(store.getState().roots[0].nodesById['a.png'].preview).toBe(`blob:${rootId}::a.png`);
+    expect(store.getState().roots[0].nodesById['a.png'].previewState).toBe('loaded');
 
-    store.getState().releasePreview('a.png');
-    expect(deps.urlManager.releaseCalls).toEqual(['a.png']);
-    expect(store.getState().nodesById['a.png'].preview).toBeUndefined();
-    expect(store.getState().nodesById['a.png'].previewState).toBe('idle');
+    store.getState().releasePreview(rootId, 'a.png');
+    expect(deps.urlManager.releaseCalls).toEqual([`${rootId}::a.png`]);
+    expect(store.getState().roots[0].nodesById['a.png'].preview).toBeUndefined();
+    expect(store.getState().roots[0].nodesById['a.png'].previewState).toBe('idle');
   });
 
   it('loadPreview is idempotent while already loading/loaded', async () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
-    await Promise.all([store.getState().loadPreview('a.png'), store.getState().loadPreview('a.png')]);
-    await store.getState().loadPreview('a.png');
-    expect(deps.urlManager.acquireCalls).toEqual(['a.png']);
+    const rootId = store.getState().roots[0].id;
+    await Promise.all([store.getState().loadPreview(rootId, 'a.png'), store.getState().loadPreview(rootId, 'a.png')]);
+    await store.getState().loadPreview(rootId, 'a.png');
+    expect(deps.urlManager.acquireCalls).toEqual([`${rootId}::a.png`]);
   });
 
   it('marks a non-previewable file unavailable without touching the URL manager', async () => {
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
-    await store.getState().toggleExpand('folder1');
-    await store.getState().loadPreview('folder1/b.txt');
-    expect(store.getState().nodesById['folder1/b.txt'].previewState).toBe('unavailable');
+    const rootId = store.getState().roots[0].id;
+    await store.getState().loadPreview(rootId, 'folder1/b.txt');
+    expect(store.getState().roots[0].nodesById['folder1/b.txt'].previewState).toBe('unavailable');
     expect(deps.urlManager.acquireCalls).toEqual([]);
   });
 });
 
 describe('createAssetStore — reconnect at boot', () => {
   it('reconnectFromStorage lands on connected when permission is already granted', async () => {
-    const deps = makeDeps({ handleStore: fakeHandleStore(fakeHandle('assets')) });
+    const deps = makeDeps({ handleStore: fakeHandleStore([{ id: 'root-1', handle: fakeHandle('assets') }]) });
     const store = createAssetStore(deps);
     await store.getState().reconnectFromStorage();
-    expect(store.getState().status).toBe('connected');
+    expect(store.getState().roots).toHaveLength(1);
+    expect(store.getState().roots[0].status).toBe('connected');
   });
 
   it('reconnectFromStorage lands on needsPermission without prompting, and grantPermission resolves it', async () => {
     const deps = makeDeps({
-      handleStore: fakeHandleStore(fakeHandle('assets', { queryPermission: 'prompt', requestPermission: 'granted' })),
+      handleStore: fakeHandleStore([
+        { id: 'root-1', handle: fakeHandle('assets', { queryPermission: 'prompt', requestPermission: 'granted' }) },
+      ]),
     });
     const store = createAssetStore(deps);
     await store.getState().reconnectFromStorage();
-    expect(store.getState().status).toBe('needsPermission');
-    expect(store.getState().rootName).toBe('assets');
+    expect(store.getState().roots[0].status).toBe('needsPermission');
+    expect(store.getState().roots[0].rootName).toBe('assets');
 
-    await store.getState().grantPermission();
-    expect(store.getState().status).toBe('connected');
+    await store.getState().grantPermission('root-1');
+    expect(store.getState().roots[0].status).toBe('connected');
   });
 
-  it('reconnectFromStorage with nothing persisted lands on disconnected', async () => {
-    const deps = makeDeps({ handleStore: fakeHandleStore(undefined) });
+  it('reconnectFromStorage with nothing persisted lands on an empty roots list', async () => {
+    const deps = makeDeps({ handleStore: fakeHandleStore([]) });
     const store = createAssetStore(deps);
     await store.getState().reconnectFromStorage();
-    expect(store.getState().status).toBe('disconnected');
+    expect(store.getState().roots).toEqual([]);
+  });
+
+  it('reconnectFromStorage is idempotent — a root already present is never re-added', async () => {
+    const deps = makeDeps({ handleStore: fakeHandleStore([{ id: 'root-1', handle: fakeHandle('assets') }]) });
+    const store = createAssetStore(deps);
+    await store.getState().reconnectFromStorage();
+    await store.getState().reconnectFromStorage();
+    expect(store.getState().roots).toHaveLength(1);
+  });
+
+  it('reconnectFromStorage restores every persisted root, not just one', async () => {
+    const deps = makeDeps({
+      handleStore: fakeHandleStore([
+        { id: 'root-1', handle: fakeHandle('first') },
+        { id: 'root-2', handle: fakeHandle('second') },
+      ]),
+    });
+    const store = createAssetStore(deps);
+    await store.getState().reconnectFromStorage();
+    const roots = store.getState().roots;
+    expect(roots.map((r) => r.rootName).sort()).toEqual(['first', 'second']);
+    expect(roots.every((r) => r.status === 'connected')).toBe(true);
   });
 });
 
 describe('createAssetStore — referential stability', () => {
   it('a mutation that changes nothing about a slice does not need to replace its reference', async () => {
     // Guards the "unstable Zustand selector" pitfall from the shared build
-    // context: nodesById/rootIds must only be replaced when their contents
+    // context: a root's rootIds must only be replaced when its contents
     // actually change, not on every unrelated action, or a selector reading
-    // them would re-render (or getSnapshot-loop) on unrelated store writes.
+    // it would re-render (or getSnapshot-loop) on unrelated store writes.
     const deps = makeDeps();
     const store = createAssetStore(deps);
     await store.getState().connect();
-    const rootIdsBefore = store.getState().rootIds;
-    await store.getState().loadPreview('a.png'); // touches nodesById, not rootIds
-    expect(store.getState().rootIds).toBe(rootIdsBefore);
+    const rootId = store.getState().roots[0].id;
+    const rootIdsBefore = store.getState().roots[0].rootIds;
+    await store.getState().loadPreview(rootId, 'a.png'); // touches nodesById, not rootIds
+    expect(store.getState().roots[0].rootIds).toBe(rootIdsBefore);
+  });
+
+  it('patching one root never replaces another root\'s object reference', async () => {
+    const deps = makeDeps();
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+    await store.getState().connect();
+    const [first, second] = store.getState().roots;
+
+    await store.getState().loadPreview(first.id, 'a.png');
+    expect(store.getState().roots.find((r) => r.id === second.id)).toBe(second);
   });
 });
 
@@ -297,12 +406,13 @@ describe('createAssetStore — recognizeNode', () => {
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    expect(reader.readTextCalls).toEqual([]); // connect()/listing never reads text
+    expect(reader.readTextCalls).toEqual([]); // connect()/the structural scan never reads text
 
-    await store.getState().recognizeNode('noise.glsl');
+    await store.getState().recognizeNode(rootId, 'noise.glsl');
     expect(reader.readTextCalls).toEqual([['noise.glsl']]);
-    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+    expect(store.getState().roots[0].nodesById['noise.glsl'].recognized).toBe(true);
   });
 
   it('keeps the recognized object(s) and the exact source text alongside "recognized: true"', async () => {
@@ -310,10 +420,11 @@ describe('createAssetStore — recognizeNode', () => {
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('noise.glsl');
+    await store.getState().recognizeNode(rootId, 'noise.glsl');
 
-    const node = store.getState().nodesById['noise.glsl'];
+    const node = store.getState().roots[0].nodesById['noise.glsl'];
     expect(node.sourceText).toBe(RECOGNITION_TEXT['noise.glsl']);
     expect(node.recognizedObjects).toHaveLength(1);
     expect(node.recognizedObjects?.[0]).toMatchObject({ name: 'noise.glsl', uniforms: ['uTime'] });
@@ -324,10 +435,11 @@ describe('createAssetStore — recognizeNode', () => {
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('notes.txt');
+    await store.getState().recognizeNode(rootId, 'notes.txt');
 
-    const node = store.getState().nodesById['notes.txt'];
+    const node = store.getState().roots[0].nodesById['notes.txt'];
     expect(node.recognizedObjects).toBeUndefined();
     expect(node.sourceText).toBeUndefined();
   });
@@ -337,10 +449,11 @@ describe('createAssetStore — recognizeNode', () => {
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('notes.txt');
+    await store.getState().recognizeNode(rootId, 'notes.txt');
     expect(reader.readTextCalls).toEqual([]);
-    expect(store.getState().nodesById['notes.txt'].recognized).toBe(false);
+    expect(store.getState().roots[0].nodesById['notes.txt'].recognized).toBe(false);
   });
 
   it('is a no-op once a node has already been checked', async () => {
@@ -348,9 +461,10 @@ describe('createAssetStore — recognizeNode', () => {
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('noise.glsl');
-    await store.getState().recognizeNode('noise.glsl');
+    await store.getState().recognizeNode(rootId, 'noise.glsl');
+    await store.getState().recognizeNode(rootId, 'noise.glsl');
     expect(reader.readTextCalls).toEqual([['noise.glsl']]);
   });
 
@@ -359,10 +473,54 @@ describe('createAssetStore — recognizeNode', () => {
     const deps = makeDeps({ createReader: () => reader });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('noise.glsl');
+    await store.getState().recognizeNode(rootId, 'noise.glsl');
     expect(reader.readTextCalls).toEqual([]);
-    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(false);
+    expect(store.getState().roots[0].nodesById['noise.glsl'].recognized).toBe(false);
+  });
+});
+
+describe('createAssetStore — visibleIds (recognition-filtered tree)', () => {
+  const NESTED_FIXTURE: Record<string, AssetEntry[]> = {
+    '': [
+      { name: 'shaders', kind: 'folder' },
+      { name: 'docs', kind: 'folder' },
+      { name: 'readme.md', kind: 'file' },
+    ],
+    shaders: [{ name: 'noise.glsl', kind: 'file' }, { name: 'notes.txt', kind: 'file' }],
+    docs: [{ name: 'plan.txt', kind: 'file' }],
+  };
+
+  it('marks only recognition-candidate files and their ancestor folders visible', async () => {
+    const reader = fixtureReader(NESTED_FIXTURE);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+
+    const root = store.getState().roots[0];
+    expect(root.visibleIds).toEqual(new Set(['shaders', 'shaders/noise.glsl']));
+
+    const filtered = flattenVisibleTree(root.nodesById, root.rootIds, root.visibleIds).map((n) => n.id);
+    expect(filtered).toEqual(['shaders']); // noise.glsl only appears once 'shaders' is expanded
+  });
+
+  it('never calls readText while computing visibility', async () => {
+    const reader = fixtureReader(NESTED_FIXTURE);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+    expect(reader.readTextCalls).toEqual([]);
+  });
+
+  it('hides a folder entirely when nothing recognizable is anywhere inside it', async () => {
+    const reader = fixtureReader(NESTED_FIXTURE);
+    const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
+    const store = createAssetStore(deps);
+    await store.getState().connect();
+    const root = store.getState().roots[0];
+    expect(root.visibleIds?.has('docs')).toBe(false);
+    expect(root.visibleIds?.has('readme.md')).toBe(false);
   });
 });
 
@@ -380,25 +538,30 @@ describe('createAssetStore — setRecognitionConfig', () => {
     expect(store.getState().recognitionConfig).toEqual({ fileExtensions: ['.glsl'] });
   });
 
-  it('changes what the NEXT recognizeNode call matches on', async () => {
+  it('changes what the NEXT connect()\'s scan and recognizeNode call match on', async () => {
     const reader = fixtureReader(SWAP_FIXTURE, SWAP_TEXT);
     // Starts with a config that cannot possibly match `.glsl`.
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.wgsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const firstRootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('noise.glsl');
-    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(false);
+    await store.getState().recognizeNode(firstRootId, 'noise.glsl');
+    expect(store.getState().roots[0].nodesById['noise.glsl'].recognized).toBe(false);
+    expect(store.getState().roots[0].visibleIds?.size).toBe(0);
 
-    // Swap to a config that matches `.glsl`. Reconnecting gives the store a
-    // fresh, unrecognized node so the new config's next check is observable
-    // (already-checked nodes are deliberately not retroactively rechecked).
+    // Swap to a config that matches `.glsl`. Already-connected roots are
+    // deliberately NOT retroactively re-scanned — connecting a fresh root
+    // makes the new config's effect on both the scan and `recognizeNode`
+    // observable.
     store.getState().setRecognitionConfig({ fileExtensions: ['.glsl'] });
     expect(store.getState().recognitionConfig).toEqual({ fileExtensions: ['.glsl'] });
     await store.getState().connect();
+    const secondRootId = store.getState().roots[1].id;
 
-    await store.getState().recognizeNode('noise.glsl');
-    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+    expect(store.getState().roots[1].visibleIds).toEqual(new Set(['noise.glsl']));
+    await store.getState().recognizeNode(secondRootId, 'noise.glsl');
+    expect(store.getState().roots[1].nodesById['noise.glsl'].recognized).toBe(true);
   });
 
   it('does not retroactively re-check an already-recognized node after a config swap', async () => {
@@ -406,13 +569,14 @@ describe('createAssetStore — setRecognitionConfig', () => {
     const deps = makeDeps({ createReader: () => reader, recognitionConfig: { fileExtensions: ['.glsl'] } });
     const store = createAssetStore(deps);
     await store.getState().connect();
+    const rootId = store.getState().roots[0].id;
 
-    await store.getState().recognizeNode('noise.glsl');
-    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+    await store.getState().recognizeNode(rootId, 'noise.glsl');
+    expect(store.getState().roots[0].nodesById['noise.glsl'].recognized).toBe(true);
 
     store.getState().setRecognitionConfig({ fileExtensions: ['.wgsl'] });
-    await store.getState().recognizeNode('noise.glsl'); // no-op: already checked
-    expect(store.getState().nodesById['noise.glsl'].recognized).toBe(true);
+    await store.getState().recognizeNode(rootId, 'noise.glsl'); // no-op: already checked
+    expect(store.getState().roots[0].nodesById['noise.glsl'].recognized).toBe(true);
   });
 });
 

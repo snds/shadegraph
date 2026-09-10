@@ -21,7 +21,7 @@ import { AssetBrowserPanel } from '../assets/AssetBrowserPanel';
 import { CritiquePanel } from '../critique/CritiquePanel';
 import { LayerStack } from '../layers/LayerStack';
 import { ManifestPanel } from '../manifest/ManifestPanel';
-import { PlaceholderPanel } from './PlaceholderPanel';
+import { NodeGallery } from '../nodes/NodeGallery';
 
 export interface PivotItem {
   id: string;
@@ -31,19 +31,10 @@ export interface PivotItem {
   content: ComponentType;
 }
 
-function NodesPlaceholder() {
-  return (
-    <PlaceholderPanel
-      label="Nodes"
-      hint="Node type gallery — wired up by a later Phase 6 task, not this one."
-    />
-  );
-}
-
 export const pivotItems: PivotItem[] = [
   { id: 'layers', icon: 'layers', label: 'Layers', content: LayerStack },
   { id: 'assets', icon: 'folder', label: 'Assets', content: AssetBrowserPanel },
-  { id: 'nodes', icon: 'account_tree', label: 'Nodes', content: NodesPlaceholder },
+  { id: 'nodes', icon: 'account_tree', label: 'Nodes', content: NodeGallery },
   { id: 'manifest', icon: 'inventory_2', label: 'Manifest', content: ManifestPanel },
   { id: 'critique', icon: 'rate_review', label: 'Critique', content: CritiquePanel },
 ];

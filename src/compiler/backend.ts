@@ -92,7 +92,12 @@ export interface CompileOptions {
   /** Stop the graph at this node and output it directly — powers per-node
    *  preview thumbnails and Nuke-style "solo this node to the viewer". */
   previewNodeId?: string;
-  /** Preview only this layer in isolation. */
+  /** Preview only this stack node in isolation — a leaf `ShaderLayer` id
+   *  (its own graph, unblended, unmasked) OR a `LayerGroup` id (its own
+   *  `children` folded together, but not blended into whatever it would
+   *  normally sit inside). Named for the leaf case (predates groups); both
+   *  `ViewerSource`'s "solo a layer" and the Layers panel's per-row
+   *  thumbnails (leaf AND group rows) go through this same option. */
   previewLayerId?: string;
   /** Emit debug annotations / source map. */
   debug?: boolean;

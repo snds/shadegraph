@@ -16,6 +16,8 @@ export const outputMask: NodeDefinition = {
   title: 'Mask Output',
   description:
     "Terminal node for a mask graph: the single grayscale value multiplied into this mask's layer, per-pixel.",
+  guidance:
+    "Only appears when editing a layer's mask (via the layer stack's mask affordance), never a main graph. Wire a noise/ramp chain into Value; the result multiplies that layer's opacity per-pixel.",
   inputs: [inp('value', 'Value', 'float', 1)],
   outputs: [],
   params: [],

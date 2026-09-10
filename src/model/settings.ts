@@ -67,9 +67,17 @@ export interface PerformanceBudgetConfig {
 
 // ── ProjectSettings ─────────────────────────────────────────────────────────
 
+/** Where the main preview (`MainViewer`) docks relative to the node graph
+ *  (`GraphCanvas`) within their shared main content region. `'bottom'` is the
+ *  pre-existing default (preview as a footer under the graph); `'top'` swaps
+ *  the two. See `src/ui/MainContentRegion.tsx`, the one place that reads
+ *  this field. */
+export type PreviewDockPosition = 'top' | 'bottom';
+
 export interface ProjectSettings {
   referenceCritique?: ReferenceCritiqueConfig;
   performanceBudget?: PerformanceBudgetConfig;
+  previewDockPosition?: PreviewDockPosition;
 }
 
 /** The settings equivalent of `emptyDocument()` — every field genuinely
@@ -155,6 +163,10 @@ function readPerformanceBudget(value: unknown): PerformanceBudgetConfig | undefi
   return { targetMsPerFrame: value.targetMsPerFrame, population };
 }
 
+function readPreviewDockPosition(value: unknown): PreviewDockPosition | undefined {
+  return value === 'top' || value === 'bottom' ? value : undefined;
+}
+
 /**
  * Untrusted JSON text → a best-effort `ProjectSettings`. Never throws and
  * never reports *why* a sub-field was dropped (that could mean echoing a
@@ -175,6 +187,8 @@ export function parseSettingsText(text: string): ProjectSettings {
   if (referenceCritique) settings.referenceCritique = referenceCritique;
   const performanceBudget = readPerformanceBudget(parsed.performanceBudget);
   if (performanceBudget) settings.performanceBudget = performanceBudget;
+  const previewDockPosition = readPreviewDockPosition(parsed.previewDockPosition);
+  if (previewDockPosition) settings.previewDockPosition = previewDockPosition;
   return settings;
 }
 

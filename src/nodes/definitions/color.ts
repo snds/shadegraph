@@ -12,6 +12,8 @@ export const colorRamp: NodeDefinition = {
   category: 'color',
   title: 'Color Ramp',
   description: 'Maps a scalar 0..1 through a two-stop gradient. Feeds noise into colour.',
+  guidance:
+    'The standard bridge from a grayscale signal (noise, a mask) into color. Drag the Start/End Position stops to control where the gradient transitions.',
   inputs: [inp('t', 'Factor', 'float', 0)],
   outputs: [out('color', 'Color', 'color')],
   params: [

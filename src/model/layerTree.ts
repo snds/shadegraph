@@ -171,6 +171,128 @@ export function updateStackNode(
   return { nodes: next, changed };
 }
 
+/** `id` plus every id nested (at any depth) inside it if it is a group — the
+ *  "cannot drop a group inside its own descendant" check for drag-and-drop
+ *  (`moveStackNode`, below) needs this, and it doubles as "everything that
+ *  disappears if this node is removed" for `removeLayer`'s selection cleanup. */
+export function subtreeIds(node: StackNode): Set<string> {
+  const ids = new Set<string>([node.id]);
+  if (isGroupNode(node)) {
+    for (const child of node.children) for (const id of subtreeIds(child)) ids.add(id);
+  }
+  return ids;
+}
+
+/** Every group id that (transitively) CONTAINS `id`, in no particular order —
+ *  not `id` itself. A leaf/group's own composited thumbnail always depends on
+ *  more than just its own dirtiness: a change anywhere inside it must also
+ *  invalidate every ancestor group's already-folded composite (see
+ *  `LayerGroup`'s own doc comment on `foldStack`). `[]` if `id` is not found,
+ *  or sits at the root (no enclosing group). */
+export function ancestorGroupIds(nodes: readonly StackNode[], id: string): string[] {
+  const path: string[] = [];
+  function walk(list: readonly StackNode[]): boolean {
+    for (const n of list) {
+      if (n.id === id) return true;
+      if (isGroupNode(n) && walk(n.children)) {
+        path.push(n.id);
+        return true;
+      }
+    }
+    return false;
+  }
+  walk(nodes);
+  return path;
+}
+
+/** Where to splice a node during a drag-and-drop move (`moveStackNode`,
+ *  below): either immediately before/after an existing sibling (`refId`) in
+ *  whichever sibling array `parentId` names (`null` = the document root), or
+ *  appended as the LAST child of a group (`parentId` — required, since
+ *  "append" only makes sense as "into a group"). `kind: 'before' | 'after'`
+ *  is ARRAY order (bottom-to-top), not screen order — see
+ *  `src/ui/layers/reorder.ts`'s `screenDropTarget` for the one place that
+ *  inversion is allowed to happen, same convention as `topFirst`. */
+export type StackMoveTarget =
+  | { parentId: string | null; kind: 'before' | 'after'; refId: string }
+  | { parentId: string; kind: 'append' };
+
+/** Repositions `id` to `target`, anywhere in the tree — reorder within its
+ *  current parent, or move across an arbitrary group boundary (including into
+ *  a group it was not previously in, or out to the root), in one splice.
+ *  Deliberately more general than `reorderLayer`'s single-step
+ *  same-sibling-array move: drag-and-drop needs an arbitrary destination, not
+ *  a sequence of one-step nudges. Pure — never mutates `nodes` — and returns
+ *  `{ error }` instead of throwing for every rejection (unknown id, dropping a
+ *  group inside itself or its own descendant, unknown `refId`), so the store
+ *  can surface it via `lastError` exactly like every other tree action here. */
+export function moveStackNode(
+  nodes: readonly StackNode[],
+  id: string,
+  target: StackMoveTarget,
+): { nodes: StackNode[]; error?: string } {
+  const asIs = nodes as StackNode[];
+  const node = findStackNode(nodes, id);
+  if (!node) return { nodes: asIs, error: `No layer "${id}".` };
+
+  if (target.parentId === id) return { nodes: asIs, error: 'Cannot drop a group inside itself.' };
+  if (target.parentId) {
+    const parentNode = findStackNode(nodes, target.parentId);
+    if (!parentNode || !isGroupNode(parentNode)) {
+      return { nodes: asIs, error: `"${target.parentId}" is not a group.` };
+    }
+    if (isGroupNode(node) && subtreeIds(node).has(target.parentId)) {
+      return { nodes: asIs, error: 'Cannot drop a group inside its own descendant.' };
+    }
+  }
+  if (target.kind !== 'append' && target.refId === id) return { nodes: asIs };
+
+  const { nodes: withoutNode, changed } = updateStackNode(nodes, id, () => null);
+  if (!changed) return { nodes: asIs, error: `No layer "${id}".` };
+
+  const destSiblings = target.parentId
+    ? ((findStackNode(withoutNode, target.parentId) as LayerGroup | undefined)?.children ?? [])
+    : withoutNode;
+
+  let nextDest: StackNode[];
+  if (target.kind === 'append') {
+    nextDest = [...destSiblings, node];
+  } else {
+    const refIndex = destSiblings.findIndex((n) => n.id === target.refId);
+    if (refIndex < 0) return { nodes: asIs, error: `No layer "${target.refId}".` };
+    const insertAt = target.kind === 'after' ? refIndex + 1 : refIndex;
+    nextDest = [...destSiblings.slice(0, insertAt), node, ...destSiblings.slice(insertAt)];
+  }
+
+  const nextNodes = target.parentId
+    ? updateStackNode(withoutNode, target.parentId, (g) => ({ ...(g as LayerGroup), children: nextDest })).nodes
+    : nextDest;
+
+  return { nodes: nextNodes };
+}
+
+/** Inserts `node` directly BELOW `insertBeneathId` in its own sibling array
+ *  (same array-order convention as `moveStackNode`'s `'before'`/`'after'` —
+ *  screen-below is array-index-of-the-reference, per `reorder.ts`'s header),
+ *  or appends it at the document root's end (the original, simpler default)
+ *  when `insertBeneathId` is `undefined` or does not resolve. Shared by
+ *  `addLayer`/`addGroup` so both "new sibling" affordances place their result
+ *  the same way relative to whatever the Layers panel currently has selected. */
+export function insertStackNode(
+  nodes: readonly StackNode[],
+  node: StackNode,
+  insertBeneathId?: string,
+): StackNode[] {
+  if (insertBeneathId) {
+    const info = findSiblingArray(nodes, insertBeneathId);
+    if (info) {
+      const nextSiblings = [...info.siblings.slice(0, info.index), node, ...info.siblings.slice(info.index)];
+      return replaceSiblingArray(nodes as StackNode[], insertBeneathId, nextSiblings);
+    }
+  }
+  return [...nodes, node];
+}
+
 /** Maps every LEAF layer in the tree through `fn`, preserving group nesting
  *  and structural sharing: an unchanged subtree keeps its original array/
  *  object references (bottom-up, so a change deep in one branch never forces

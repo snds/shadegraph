@@ -66,6 +66,21 @@ export interface GraphThisDeps {
   ensureConnectedFolder: (name: string) => string;
   ensureDiscoveredObject: (input: { folderId: string; path: string[]; name: string }) => string;
   setDiscoveredObjectDraft: (objectId: string, draft: ShaderDocument) => void;
+  /** "Formalize, don't discard" (this task's own scope): if the Assets
+   *  panel's background auto-graph pass already built a `ShaderNode` for
+   *  this exact (object, sourceText) — see
+   *  `src/ui/assets/autoGraphCache.ts` — this returns it so `graphThis`
+   *  reuses its `params`/`chunkSource` instead of calling
+   *  `graphFromRecognizedObject` a second time. Optional and best-effort: a
+   *  cache miss (returns `undefined`, or omitted entirely) falls back to
+   *  deriving a fresh node exactly as before this task — never a
+   *  correctness dependency, purely a dedup/performance seam. The
+   *  `requires` check below still ALWAYS runs against the real
+   *  document/manifest, regardless of a cache hit — the auto-graph pass's
+   *  own check is scoped to just this one file (see `autoGraph.ts`'s header),
+   *  which is not guaranteed to match "graphed anywhere in the real
+   *  document" for an object with cross-file `requires`. */
+  getCachedAutoGraphNode?: () => ShaderNode | undefined;
 }
 
 /** Turns ONE recognized shader object into a graphed `chunk.raw` node in the
@@ -82,13 +97,33 @@ export function graphThis(
   deps: GraphThisDeps,
 ): GraphThisResult {
   const graphed = graphedChunkNames(deps.getDocument(), deps.getManifest());
-  const result = graphFromRecognizedObject(object, sourceText, {
-    graphedChunkNames: graphed,
-    makeId: () => makeNodeId(CHUNK_RAW_NODE_TYPE),
-  });
-  if (!result.ok) return result;
 
-  const nodeId = deps.addPreparedNode(result.node);
+  const cachedNode = deps.getCachedAutoGraphNode?.();
+  let node: ShaderNode;
+  if (cachedNode) {
+    // The auto-graph pass's OWN missing-requires check (inside
+    // `buildAutoGraphDocument`) is scoped to just this file's own objects —
+    // re-validate against the REAL document/manifest scope here, exactly as
+    // the non-cached branch below does via `graphFromRecognizedObject`.
+    const missing = object.requires.filter((name) => !graphed.has(name));
+    if (missing.length > 0) return { ok: false, reason: 'missing-requires', missing };
+    // A fresh id (never the cached node's own — reusing that id verbatim
+    // would collide the moment "graph this" is clicked more than once for
+    // the same object) and the same default cosmetic position
+    // `graphFromRecognizedObject` itself would have used; everything else
+    // (`params`, `chunkSource`, `title`) is reused verbatim, unparsed a
+    // second time.
+    node = { ...cachedNode, id: makeNodeId(CHUNK_RAW_NODE_TYPE) };
+  } else {
+    const result = graphFromRecognizedObject(object, sourceText, {
+      graphedChunkNames: graphed,
+      makeId: () => makeNodeId(CHUNK_RAW_NODE_TYPE),
+    });
+    if (!result.ok) return result;
+    node = result.node;
+  }
+
+  const nodeId = deps.addPreparedNode(node);
   if (!nodeId) return { ok: false, reason: 'no-active-graph' };
 
   const folderId = deps.ensureConnectedFolder(connectedFolderName);

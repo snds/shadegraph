@@ -11,6 +11,7 @@ export const mathAdd: NodeDefinition = {
   category: 'math',
   title: 'Add',
   description: 'a + b.',
+  guidance: 'Sums two scalars — layering an offset onto a noise value, combining two masks, etc.',
   inputs: [inp('a', 'A', 'float', 0), inp('b', 'B', 'float', 0)],
   outputs: [out('result', 'Result', 'float')],
   params: [],
@@ -39,6 +40,7 @@ export const mathMul: NodeDefinition = {
   category: 'math',
   title: 'Multiply',
   description: 'a * b.',
+  guidance: 'Multiplies two scalars — the usual way to scale a value or apply one signal as a mask on another.',
   inputs: [inp('a', 'A', 'float', 1), inp('b', 'B', 'float', 1)],
   outputs: [out('result', 'Result', 'float')],
   params: [],
@@ -67,6 +69,8 @@ export const mathMix: NodeDefinition = {
   category: 'math',
   title: 'Mix',
   description: 'Linear blend between A and B by a scalar factor.',
+  guidance:
+    'Crossfades between two vec3 inputs (colors, normals) by Factor. Factor is clamped 0..1, so a noise value plugged straight in stays safe.',
   inputs: [
     inp('a', 'A', 'vec3', [0, 0, 0]),
     inp('b', 'B', 'vec3', [1, 1, 1]),

@@ -54,14 +54,28 @@ export interface DirectoryReader {
   readText(path: string[]): Promise<string | undefined>;
 }
 
-/** Persists the one connected root's directory handle across sessions.
- *  `save`/`load`/`clear` deal in the concrete `FileSystemDirectoryHandle`
- *  type (it's what has to be stored), but this interface itself is what
- *  `assetStore.ts` depends on, so a test can swap in an in-memory fake
- *  instead of real IndexedDB. */
+/** One persisted connected root: the caller-assigned `id` (`assetStore.ts`'s
+ *  `AssetRoot.id`) alongside the handle it names. */
+export interface StoredAssetRoot {
+  id: string;
+  handle: FileSystemDirectoryHandle;
+}
+
+/** Persists every connected root's directory handle across sessions, keyed
+ *  by the caller-assigned `id` — multiple simultaneously-connected folders,
+ *  not just one. `save`/`loadAll`/`remove`/`clear` deal in the concrete
+ *  `FileSystemDirectoryHandle` type (it's what has to be stored), but this
+ *  interface itself is what `assetStore.ts` depends on, so a test can swap
+ *  in an in-memory fake instead of real IndexedDB. */
 export interface HandleStore {
-  save(handle: FileSystemDirectoryHandle): Promise<void>;
-  load(): Promise<FileSystemDirectoryHandle | undefined>;
+  /** Adds or overwrites the persisted handle for `id`. */
+  save(id: string, handle: FileSystemDirectoryHandle): Promise<void>;
+  /** Every persisted root, order unspecified — `assetStore.ts`'s
+   *  `reconnectFromStorage` re-adds each by its own `id`, not positionally. */
+  loadAll(): Promise<StoredAssetRoot[]>;
+  /** Forgets ONE persisted root. */
+  remove(id: string): Promise<void>;
+  /** Forgets every persisted root. */
   clear(): Promise<void>;
 }
 

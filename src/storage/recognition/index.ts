@@ -13,3 +13,5 @@ export type {
   GraphFromRecognizedObjectOptions,
   GraphFromRecognizedObjectResult,
 } from './graphFromRecognizedObject';
+export { autoGraphContentSignature, buildAutoGraphDocument } from './autoGraph';
+export type { AutoGraphResult } from './autoGraph';

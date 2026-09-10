@@ -226,6 +226,40 @@ describe('wgslBackend.compileDocument', () => {
     expect(program.module).toContain('return');
   });
 
+  // Same generalization as `glsl-es.test.ts`: a Layers-panel row's thumbnail
+  // for a GROUP compiles through this exact path — `previewLayerId` naming a
+  // `LayerGroup` folds its own children in isolation.
+  it('previewLayerId isolates a GROUP by folding its own children, bypassing the parent stack', () => {
+    const doc = twoLayerDoc();
+    const group: LayerGroup = {
+      kind: 'group',
+      id: 'grp1',
+      name: 'Group',
+      blend: 'normal',
+      opacity: 1,
+      enabled: true,
+      visible: true,
+      children: doc.layerStack.layers,
+    };
+    const third = emptyLayer('Third');
+    const wrapped = emptyDocument('Wrapped');
+    wrapped.layerStack.layers = [group, third];
+
+    const program = wgslBackend.compileDocument(wrapped, { previewLayerId: 'grp1' });
+    expect(program.diagnostics).toEqual([]);
+    // Two blend call sites (the group's own two children) — never a third
+    // for the group's own blend into the parent stack.
+    const blendCalls = (program.module ?? '').match(/= sg_blend\w+\(/g) ?? [];
+    expect(blendCalls).toHaveLength(2);
+    expect(program.module).toContain('return');
+  });
+
+  it('previewLayerId reports a diagnostic instead of throwing when the id resolves to nothing', () => {
+    const doc = twoLayerDoc();
+    const program = wgslBackend.compileDocument(doc, { previewLayerId: 'does-not-exist' });
+    expect(program.diagnostics.some((d) => d.level === 'error')).toBe(true);
+  });
+
   it('previewNodeId resolves the owning layer and isolates it, bypassing compositing', () => {
     const doc = twoLayerDoc();
     (doc.layerStack.layers[1] as ShaderLayer).graph = uvFbmRampOutputGraph();

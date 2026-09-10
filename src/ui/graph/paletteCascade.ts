@@ -1,12 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// ShadeGraph — Toolbar palette cascade offset
+// ShadeGraph — Cascade offset for anchor-less node adds
 // ───────────────────────────────────────────────────────────────────────────
-// The "+ Add node" toolbar button has no pointer position to anchor on (unlike
-// double-click / right-click, which always land where the user pointed), so it
-// anchors from the pane's center instead. Without this offset, every toolbar
-// add would land on that same center point and stack invisibly. Each call
-// fans the anchor out along a diagonal, wrapping back to the start after
-// `CASCADE_CYCLE` steps so a long run of adds never drifts off-screen.
+// Some ways of adding a node have no pointer position to anchor on (unlike
+// double-click / right-click, which always land where the user pointed): the
+// Nodes gallery's click-to-add (`galleryPlacement.ts`) is the current caller.
+// Without this offset, every such add would land on the exact same point and
+// stack invisibly. Each call fans the anchor out along a diagonal, wrapping
+// back to the start after `CASCADE_CYCLE` steps so a long run of adds never
+// drifts off-screen.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Pixels per step, in screen space. */
@@ -20,7 +21,7 @@ export interface CascadeOffset {
   dy: number;
 }
 
-/** `index` is the 0-based count of toolbar opens so far. Pure and
+/** `index` is the 0-based count of anchor-less adds so far. Pure and
  *  deterministic so it is testable without React or React Flow. */
 export function cascadeOffset(index: number): CascadeOffset {
   const step = (index % CASCADE_CYCLE) + 1;

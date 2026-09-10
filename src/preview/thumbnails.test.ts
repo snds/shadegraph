@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyDocument, type ShaderDocument, type ShaderGraph, type ShaderLayer } from '../model/document';
-import type { CompiledProgram } from '../compiler/backend';
+import { emptyDocument, type LayerGroup, type ShaderDocument, type ShaderGraph, type ShaderLayer } from '../model/document';
+import type { CompileOptions, CompiledProgram, TargetLang } from '../compiler/backend';
 import {
   diffChangedNodeIds,
   downstreamClosure,
@@ -189,6 +189,140 @@ function schedulerWithGraph() {
   return { gpu, compile, scheduler, doc };
 }
 
+/** A document whose single top-level `LayerGroup` ("grp1") folds two leaf
+ *  layers ("base", "overlay") — the fixture the stack-node thumbnail tests
+ *  below use to exercise ancestor-propagation (a change inside "base" must
+ *  also dirty "grp1"'s own thumbnail) and structural-signature diffing (an
+ *  opacity/blend/enabled/soloed edit that no `changedNodeIds` entry would
+ *  ever capture). */
+function docWithGroup(): { doc: ShaderDocument; groupId: string; baseId: string; overlayId: string } {
+  const doc = emptyDocument('Group fixture');
+  const base = layer0(doc);
+  base.id = 'base';
+  base.graph = chainGraph();
+  const overlay: ShaderLayer = JSON.parse(JSON.stringify(base));
+  overlay.id = 'overlay';
+  const group: LayerGroup = {
+    kind: 'group',
+    id: 'grp1',
+    name: 'Group',
+    blend: 'normal',
+    opacity: 1,
+    enabled: true,
+    visible: true,
+    children: [base, overlay],
+  };
+  doc.layerStack.layers = [group];
+  return { doc, groupId: 'grp1', baseId: 'base', overlayId: 'overlay' };
+}
+
+function schedulerWithGroup() {
+  const gpu = fakeGpu();
+  const compile = vi.fn((): CompiledProgram => okProgram());
+  const compileDocument = vi.fn(
+    (_doc: ShaderDocument, _target: TargetLang, _opts: CompileOptions): CompiledProgram => okProgram(),
+  );
+  const scheduler = new ThumbnailScheduler(gpu, {
+    compile,
+    compileDocument,
+    createCanvas: fakeCanvas,
+    scheduleFrame: syncScheduleFrame,
+    cancelFrame: () => {},
+    now: () => 0,
+  });
+  const { doc, groupId, baseId, overlayId } = docWithGroup();
+  scheduler.onDocument(doc, 'glsl-es', diffChangedNodeIds(null, doc));
+  return { gpu, compile, compileDocument, scheduler, doc, groupId, baseId, overlayId };
+}
+
+describe('ThumbnailScheduler — stack-node (Layers panel) thumbnails', () => {
+  it('never renders a stack node that has not been marked visible', async () => {
+    const { compileDocument, scheduler, groupId } = schedulerWithGroup();
+    const pending = scheduler.requestStack({ id: groupId });
+    expect(compileDocument).not.toHaveBeenCalled();
+    scheduler.setVisibleStackNodes([groupId]);
+    await expect(pending).resolves.toBeDefined();
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+    expect(compileDocument.mock.calls[0][2]).toMatchObject({ previewLayerId: groupId });
+  });
+
+  it('a second requestStack for a clean node resolves without re-rendering', async () => {
+    const { compileDocument, scheduler, groupId } = schedulerWithGroup();
+    scheduler.setVisibleStackNodes([groupId]);
+    await scheduler.requestStack({ id: groupId });
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+
+    await scheduler.requestStack({ id: groupId });
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('a node edit inside a leaf dirties that leaf AND its ancestor group, never an unrelated sibling leaf', async () => {
+    const { scheduler, compileDocument, doc, groupId, baseId, overlayId } = schedulerWithGroup();
+    scheduler.setVisibleStackNodes([groupId, baseId, overlayId]);
+    await Promise.all([
+      scheduler.requestStack({ id: groupId }),
+      scheduler.requestStack({ id: baseId }),
+      scheduler.requestStack({ id: overlayId }),
+    ]);
+    compileDocument.mockClear();
+
+    const edited = clone(doc);
+    const group = edited.layerStack.layers[0] as LayerGroup;
+    (group.children[0] as ShaderLayer).graph.nodes[1].bypassed = true; // node "b", inside "base"
+    scheduler.onDocument(edited, 'glsl-es', diffChangedNodeIds(doc, edited));
+
+    await Promise.all([scheduler.requestStack({ id: baseId }), scheduler.requestStack({ id: groupId })]);
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+
+    await scheduler.requestStack({ id: overlayId });
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('a structural edit (opacity) dirties the changed node and its ancestor, even with an empty changedNodeIds', async () => {
+    const { scheduler, compileDocument, doc, groupId, baseId, overlayId } = schedulerWithGroup();
+    scheduler.setVisibleStackNodes([groupId, baseId, overlayId]);
+    await Promise.all([
+      scheduler.requestStack({ id: groupId }),
+      scheduler.requestStack({ id: baseId }),
+      scheduler.requestStack({ id: overlayId }),
+    ]);
+    compileDocument.mockClear();
+
+    const edited = clone(doc);
+    const group = edited.layerStack.layers[0] as LayerGroup;
+    (group.children[1] as ShaderLayer).opacity = 0.4; // "overlay" — no node/edge change at all
+    const changed = diffChangedNodeIds(doc, edited);
+    expect(changed).toEqual(new Set());
+    scheduler.onDocument(edited, 'glsl-es', changed);
+
+    await Promise.all([scheduler.requestStack({ id: overlayId }), scheduler.requestStack({ id: groupId })]);
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+
+    await scheduler.requestStack({ id: baseId });
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('a stack node removed from the document rejects any still-pending waiters', async () => {
+    const { scheduler, doc, overlayId } = schedulerWithGroup();
+    // Never made visible, so the request never resolves on its own.
+    const pending = scheduler.requestStack({ id: overlayId });
+
+    const edited = clone(doc);
+    const group = edited.layerStack.layers[0] as LayerGroup;
+    group.children = group.children.filter((c) => c.id !== overlayId);
+    scheduler.onDocument(edited, 'glsl-es', new Set());
+
+    await expect(pending).rejects.toThrow();
+  });
+
+  it('dispose rejects any pending stack waiters', async () => {
+    const { scheduler, overlayId } = schedulerWithGroup();
+    const pending = scheduler.requestStack({ id: overlayId });
+    scheduler.dispose();
+    await expect(pending).rejects.toThrow();
+  });
+});
+
 describe('ThumbnailScheduler', () => {
   it('never renders a node that has not been marked visible', async () => {
     const { compile, scheduler } = schedulerWithGraph();
@@ -339,5 +473,109 @@ describe('ThumbnailScheduler', () => {
     scheduler.markDirty('a');
     const secondCanvas = await scheduler.request({ nodeId: 'a' });
     expect(secondCanvas).toBe(firstCanvas);
+  });
+});
+
+// ── ThumbnailScheduler — asset (Assets-panel auto-graph) thumbnails ─────────
+// A THIRD, disjoint tracker: entries here carry their OWN throwaway document
+// per key rather than sharing `this.doc` (never set via `onDocument` at
+// all) — these tests never call `onDocument`, proving the asset tracker
+// works completely independently of whatever the main/Layers-panel trackers
+// are doing.
+
+function assetSchedulerFixture() {
+  const gpu = fakeGpu();
+  const compileDocument = vi.fn((): CompiledProgram => okProgram());
+  const scheduler = new ThumbnailScheduler(gpu, {
+    compileDocument,
+    createCanvas: fakeCanvas,
+    scheduleFrame: syncScheduleFrame,
+    cancelFrame: () => {},
+    now: () => 0,
+  });
+  return { gpu, compileDocument, scheduler };
+}
+
+describe('ThumbnailScheduler — asset (Assets-panel) thumbnails', () => {
+  it('never renders an asset that has not been marked visible', async () => {
+    const { compileDocument, scheduler } = assetSchedulerFixture();
+    const pending = scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(compileDocument).not.toHaveBeenCalled();
+    scheduler.setVisibleAssetThumbnails(['root1::a']);
+    await expect(pending).resolves.toBeDefined();
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('a second request with the SAME signature resolves without re-rendering', async () => {
+    const { compileDocument, scheduler } = assetSchedulerFixture();
+    scheduler.setVisibleAssetThumbnails(['root1::a']);
+    await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+
+    // A brand-new (but equivalent) document object, same signature — the
+    // whole point of a content-signature cache key: no re-render.
+    await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('a request with a DIFFERENT signature for the same key re-renders (the file changed)', async () => {
+    const { compileDocument, scheduler } = assetSchedulerFixture();
+    scheduler.setVisibleAssetThumbnails(['root1::a']);
+    await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+
+    await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig2' });
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('two different keys never collide, even with the same signature', async () => {
+    const { compileDocument, scheduler } = assetSchedulerFixture();
+    scheduler.setVisibleAssetThumbnails(['root1::a', 'root2::a']);
+    await Promise.all([
+      scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'same' }),
+      scheduler.requestAsset({ key: 'root2::a', doc: docWithChain(), signature: 'same' }),
+    ]);
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('releaseAsset drops the cached entry, rejecting any still-pending waiter', async () => {
+    const { scheduler } = assetSchedulerFixture();
+    // Never made visible, so the request never resolves on its own.
+    const pending = scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    scheduler.releaseAsset('root1::a');
+    await expect(pending).rejects.toThrow();
+  });
+
+  it('releasing a key that was never requested is a harmless no-op', () => {
+    const { scheduler } = assetSchedulerFixture();
+    expect(() => scheduler.releaseAsset('never-requested')).not.toThrow();
+  });
+
+  it('markAllDirty re-renders every already-rendered asset entry', async () => {
+    const { compileDocument, scheduler } = assetSchedulerFixture();
+    scheduler.setVisibleAssetThumbnails(['root1::a']);
+    await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(compileDocument).toHaveBeenCalledTimes(1);
+
+    scheduler.markAllDirty();
+    await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(compileDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispose rejects any pending asset waiters', async () => {
+    const { scheduler } = assetSchedulerFixture();
+    const pending = scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    scheduler.dispose();
+    await expect(pending).rejects.toThrow();
+  });
+
+  it('an asset render never touches the per-node/per-stack trackers (fully independent, no onDocument call)', async () => {
+    const { compileDocument, scheduler } = assetSchedulerFixture();
+    scheduler.setVisibleAssetThumbnails(['root1::a']);
+    // No onDocument() call anywhere in this test — the asset tracker must
+    // still work with no "current document" set at all.
+    const canvas = await scheduler.requestAsset({ key: 'root1::a', doc: docWithChain(), signature: 'sig1' });
+    expect(canvas).toBeDefined();
+    expect(compileDocument).toHaveBeenCalledTimes(1);
   });
 });

@@ -4,14 +4,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { emptyDocument, type ShaderLayer } from '../../model/document';
-import { emptyLayer } from '../../model/factory';
 import {
   arrayStep,
   canMoveLayer,
   indexOfLayer,
   moveLayer,
-  reorderedDocument,
+  screenDropTarget,
   topFirst,
 } from './reorder';
 
@@ -138,64 +136,21 @@ describe('moveLayer', () => {
   });
 });
 
-describe('reorderedDocument', () => {
-  /** A three-layer document, bottom-to-top. */
-  function doc3() {
-    const doc = emptyDocument('reorder');
-    return {
-      ...doc,
-      layerStack: {
-        ...doc.layerStack,
-        layers: [...doc.layerStack.layers, emptyLayer('Middle'), emptyLayer('Top')],
-      },
-    };
-  }
-
-  it('moves the layer and leaves every other field alone', () => {
-    const before = doc3();
-    const target = before.layerStack.layers[0].id;
-    const after = reorderedDocument(before, target, 'up')!;
-    expect(ids(after.layerStack.layers)).toEqual([
-      before.layerStack.layers[1].id,
-      target,
-      before.layerStack.layers[2].id,
-    ]);
-    expect(after.id).toBe(before.id);
-    expect(after.name).toBe(before.name);
-    expect(after.layerStack.activeLayerId).toBe(before.layerStack.activeLayerId);
+describe('screenDropTarget', () => {
+  it('"into" targets the hovered row as the new parent, appended', () => {
+    expect(screenDropTarget('into', 'grp1', null)).toEqual({ parentId: 'grp1', kind: 'append' });
+    // The hovered row's OWN parent is irrelevant for "into" — dropping ON a
+    // group always targets that group's own children, regardless of depth.
+    expect(screenDropTarget('into', 'grp1', 'grp0')).toEqual({ parentId: 'grp1', kind: 'append' });
   });
 
-  it('keeps each layer graph attached to its own layer', () => {
-    const before = doc3();
-    const target = before.layerStack.layers[2] as ShaderLayer;
-    const after = reorderedDocument(before, target.id, 'down')!;
-    expect((after.layerStack.layers.find((l) => l.id === target.id) as ShaderLayer).graph).toBe(target.graph);
+  it('screen "before" (visually above) is ARRAY "after" the hovered row', () => {
+    expect(screenDropTarget('before', 'b', null)).toEqual({ parentId: null, kind: 'after', refId: 'b' });
+    expect(screenDropTarget('before', 'b', 'grp1')).toEqual({ parentId: 'grp1', kind: 'after', refId: 'b' });
   });
 
-  it('stamps meta.updated, because a reorder is an edit', () => {
-    const before = doc3();
-    const after = reorderedDocument(before, before.layerStack.layers[0].id, 'up')!;
-    expect(Date.parse(after.meta.updated)).toBeGreaterThanOrEqual(Date.parse(before.meta.updated));
-    expect(after.meta.created).toBe(before.meta.created);
-  });
-
-  it('does not mutate the document it was given', () => {
-    const before = doc3();
-    const order = ids(before.layerStack.layers);
-    reorderedDocument(before, before.layerStack.layers[0].id, 'up');
-    expect(ids(before.layerStack.layers)).toEqual(order);
-  });
-
-  it('returns null at the ends of the stack and for unknown ids', () => {
-    const doc = doc3();
-    expect(reorderedDocument(doc, doc.layerStack.layers[0].id, 'down')).toBeNull();
-    expect(reorderedDocument(doc, doc.layerStack.layers[2].id, 'up')).toBeNull();
-    expect(reorderedDocument(doc, 'nope', 'up')).toBeNull();
-  });
-
-  it('survives a JSON round-trip after reordering', () => {
-    const doc = doc3();
-    const after = reorderedDocument(doc, doc.layerStack.layers[0].id, 'up')!;
-    expect(JSON.parse(JSON.stringify(after))).toEqual(after);
+  it('screen "after" (visually below) is ARRAY "before" the hovered row', () => {
+    expect(screenDropTarget('after', 'b', null)).toEqual({ parentId: null, kind: 'before', refId: 'b' });
+    expect(screenDropTarget('after', 'b', 'grp1')).toEqual({ parentId: 'grp1', kind: 'before', refId: 'b' });
   });
 });

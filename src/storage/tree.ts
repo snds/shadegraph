@@ -74,11 +74,23 @@ export function makeNode(path: string[], name: string, kind: AssetEntryKind, par
 
 /** Depth-first, expansion-aware flattening: a folder's children only appear
  *  if the folder itself is `expanded` (and already loaded). This — not the
- *  full tree — is what the browser panel virtualizes over. */
-export function flattenVisibleTree(nodesById: Record<string, AssetTreeNode>, rootIds: string[]): AssetTreeNode[] {
+ *  full tree — is what the browser panel virtualizes over.
+ *
+ *  `visibleIds`, when supplied, additionally hides any node not in that set
+ *  — the Assets panel's "only folders leading to a recognized file, and only
+ *  recognized files themselves" filter (`recognitionVisibility.ts`'s
+ *  `scanRecognitionFilteredTree`). Omitted entirely, every node is shown, so
+ *  existing callers that don't care about recognition filtering (or tests
+ *  built straight from a plain `nodesById`/`rootIds` fixture) are unaffected. */
+export function flattenVisibleTree(
+  nodesById: Record<string, AssetTreeNode>,
+  rootIds: string[],
+  visibleIds?: Set<string>,
+): AssetTreeNode[] {
   const out: AssetTreeNode[] = [];
   const visit = (ids: string[]): void => {
     for (const id of ids) {
+      if (visibleIds && !visibleIds.has(id)) continue;
       const node = nodesById[id];
       if (!node) continue;
       out.push(node);

@@ -26,6 +26,33 @@ export interface ThumbnailRequest {
   priority?: 'visible' | 'hover' | 'background';
 }
 
+/** The Layers-panel counterpart of `ThumbnailRequest`: `id` is a STACK NODE
+ *  (a leaf `ShaderLayer` or a `LayerGroup`), not a node inside a graph — see
+ *  `CompileOptions.previewLayerId`. Every row in the tree (leaf AND group)
+ *  requests one of these for its own live composited-output thumbnail. */
+export interface StackThumbnailRequest {
+  id: string;
+  size?: number;
+  priority?: 'visible' | 'hover' | 'background';
+}
+
+/** The Assets-panel counterpart of `ThumbnailRequest`/`StackThumbnailRequest`:
+ *  `doc` is a caller-built, self-contained THROWAWAY document (see
+ *  `src/storage/recognition/autoGraph.ts`'s `buildAutoGraphDocument`) — never
+ *  the app's real active document, and never shares node ids with it. `key`
+ *  is the caller-assigned cache identity (`AssetBrowserPanel.tsx` uses
+ *  `${rootId}::${nodeId}`, mirroring `assetStore.ts`'s own `previewKey`), and
+ *  `signature` (`autoGraphContentSignature(sourceText)`) is the ONLY thing
+ *  that invalidates an already-rendered entry — scrolling the same row back
+ *  into view with an unchanged signature resolves instantly from cache,
+ *  never re-compiling/re-rendering. */
+export interface AssetThumbnailRequest {
+  key: string;
+  doc: ShaderDocument;
+  signature: string;
+  size?: number;
+}
+
 /** What the main viewer is currently showing. */
 export type ViewerSource =
   | { kind: 'document' } // full composited layer stack (default)
@@ -64,6 +91,30 @@ export interface PreviewScheduler {
 
   /** Request a thumbnail; resolves to a texture/canvas the node card draws. */
   requestThumbnail(req: ThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement>;
+
+  /** The Layers-panel counterpart of `setVisibleNodes`/`requestThumbnail`:
+   *  which stack-node (leaf layer or group) rows currently have a live
+   *  thumbnail on screen. */
+  setVisibleLayers(ids: string[]): void;
+  /** Request one stack node's (leaf layer OR group) own composited-output
+   *  thumbnail. */
+  requestLayerThumbnail(req: StackThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement>;
+
+  /** The Assets-panel counterpart of `setVisibleNodes`/`setVisibleLayers`:
+   *  which connected-folder rows (keyed by `AssetThumbnailRequest.key`)
+   *  currently have an auto-graphed thumbnail on screen. */
+  setVisibleAssetThumbnails(keys: string[]): void;
+  /** Compiles + renders `req.doc` (a throwaway auto-graph document — see
+   *  `AssetThumbnailRequest`) through the SAME shared GPU/render-target pool
+   *  every other thumbnail uses, cached per `key` and re-rendered only when
+   *  `signature` changes. */
+  requestAssetThumbnail(req: AssetThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement>;
+  /** Drops a cached asset thumbnail entry (rejecting any still-pending
+   *  waiters) — pairs with a row scrolling out of the virtualized viewport
+   *  for good (unmount) or its connected folder being disconnected, the
+   *  same "release on scroll-out" discipline `assetStore.ts`'s
+   *  `releasePreview` already applies to reference-media preview URLs. */
+  releaseAssetThumbnail(key: string): void;
 
   /** Time (ms) budget per frame for thumbnail work; the rest goes to the main
    *  viewer so interaction stays smooth. */

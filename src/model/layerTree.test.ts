@@ -3,16 +3,20 @@ import { describe, expect, it } from 'vitest';
 import type { LayerGroup, ShaderGraph, ShaderLayer, StackNode } from './document';
 import {
   allStackNodes,
+  ancestorGroupIds,
   findLayer,
   findLayerOwningNode,
   findSiblingArray,
   findStackNode,
   firstLayerId,
   flattenLayers,
+  insertStackNode,
   isGroupNode,
   isLayerNode,
   mapLeafLayers,
+  moveStackNode,
   replaceSiblingArray,
+  subtreeIds,
   updateStackNode,
 } from './layerTree';
 
@@ -230,5 +234,131 @@ describe('mapLeafLayers', () => {
     const grp1 = next[1] as LayerGroup;
     expect(grp1).not.toBe(tree[1]);
     expect(grp1.children[0]).toBe((tree[1] as LayerGroup).children[0]); // 'B' untouched
+  });
+});
+
+describe('subtreeIds', () => {
+  it('is just the node itself for a leaf', () => {
+    expect(subtreeIds(layer('A'))).toEqual(new Set(['A']));
+  });
+
+  it('includes every nested descendant for a group', () => {
+    const grp1 = nestedTree()[1] as LayerGroup;
+    expect(subtreeIds(grp1)).toEqual(new Set(['grp1', 'B', 'grp2', 'C', 'D']));
+  });
+});
+
+describe('ancestorGroupIds', () => {
+  it('is empty for a root-level node', () => {
+    expect(ancestorGroupIds(nestedTree(), 'A')).toEqual([]);
+  });
+
+  it('lists every enclosing group for a deeply nested leaf', () => {
+    expect(ancestorGroupIds(nestedTree(), 'D')).toEqual(['grp2', 'grp1']);
+  });
+
+  it('lists the enclosing group for a nested group itself', () => {
+    expect(ancestorGroupIds(nestedTree(), 'grp2')).toEqual(['grp1']);
+  });
+
+  it('is empty for an id that does not exist', () => {
+    expect(ancestorGroupIds(nestedTree(), 'nope')).toEqual([]);
+  });
+});
+
+describe('insertStackNode', () => {
+  it('appends at the root end when insertBeneathId is omitted', () => {
+    const tree = nestedTree();
+    const next = insertStackNode(tree, layer('NEW'), undefined);
+    expect(next.map((n) => n.id)).toEqual(['A', 'grp1', 'NEW']);
+  });
+
+  it('appends at the root end when insertBeneathId does not resolve', () => {
+    const tree = nestedTree();
+    const next = insertStackNode(tree, layer('NEW'), 'nope');
+    expect(next.map((n) => n.id)).toEqual(['A', 'grp1', 'NEW']);
+  });
+
+  it('inserts directly below the named sibling in its own array, at any depth', () => {
+    const tree = nestedTree();
+    const next = insertStackNode(tree, layer('NEW'), 'A');
+    expect(next.map((n) => n.id)).toEqual(['NEW', 'A', 'grp1']);
+
+    const nested = insertStackNode(tree, layer('NEW'), 'D');
+    const grp2 = (nested[1] as LayerGroup).children[1] as LayerGroup;
+    expect(grp2.children.map((n) => n.id)).toEqual(['C', 'NEW', 'D']);
+  });
+});
+
+describe('moveStackNode', () => {
+  it('reorders within the same sibling array', () => {
+    const tree = nestedTree();
+    const grp1 = tree[1] as LayerGroup;
+    const { nodes, error } = moveStackNode(grp1.children, 'B', {
+      parentId: null,
+      kind: 'after',
+      refId: 'grp2',
+    });
+    expect(error).toBeUndefined();
+    expect(nodes.map((n) => n.id)).toEqual(['grp2', 'B']);
+  });
+
+  it('moves a leaf out of a group to the root', () => {
+    const tree = nestedTree();
+    const { nodes, error } = moveStackNode(tree, 'B', { parentId: null, kind: 'after', refId: 'A' });
+    expect(error).toBeUndefined();
+    expect(nodes.map((n) => n.id)).toEqual(['A', 'B', 'grp1']);
+    const grp1 = nodes[2] as LayerGroup;
+    expect(grp1.children.map((n) => n.id)).toEqual(['grp2']);
+  });
+
+  it('moves a leaf into an existing group by appending', () => {
+    const tree = nestedTree();
+    const { nodes, error } = moveStackNode(tree, 'A', { parentId: 'grp1', kind: 'append' });
+    expect(error).toBeUndefined();
+    expect(nodes.map((n) => n.id)).toEqual(['grp1']);
+    const grp1 = nodes[0] as LayerGroup;
+    expect(grp1.children.map((n) => n.id)).toEqual(['B', 'grp2', 'A']);
+  });
+
+  it('moves a leaf into an existing group before/after a specific member', () => {
+    const tree = nestedTree();
+    const { nodes, error } = moveStackNode(tree, 'A', { parentId: 'grp1', kind: 'before', refId: 'B' });
+    expect(error).toBeUndefined();
+    const grp1 = nodes[0] as LayerGroup;
+    expect(grp1.children.map((n) => n.id)).toEqual(['A', 'B', 'grp2']);
+  });
+
+  it('rejects an unknown id', () => {
+    const { error, nodes } = moveStackNode(nestedTree(), 'nope', { parentId: null, kind: 'after', refId: 'A' });
+    expect(error).toMatch(/No layer/);
+    expect(nodes.map((n) => n.id)).toEqual(['A', 'grp1']);
+  });
+
+  it('rejects dropping a group inside itself', () => {
+    const { error } = moveStackNode(nestedTree(), 'grp1', { parentId: 'grp1', kind: 'append' });
+    expect(error).toMatch(/inside itself/);
+  });
+
+  it('rejects dropping a group inside its own descendant', () => {
+    const { error } = moveStackNode(nestedTree(), 'grp1', { parentId: 'grp2', kind: 'append' });
+    expect(error).toMatch(/own descendant/);
+  });
+
+  it('rejects a parentId that is not a group', () => {
+    const { error } = moveStackNode(nestedTree(), 'A', { parentId: 'B', kind: 'append' });
+    expect(error).toMatch(/not a group/);
+  });
+
+  it('rejects an unknown refId', () => {
+    const { error } = moveStackNode(nestedTree(), 'A', { parentId: null, kind: 'after', refId: 'nope' });
+    expect(error).toMatch(/No layer "nope"/);
+  });
+
+  it('is a no-op when the ref is the node itself', () => {
+    const tree = nestedTree();
+    const { nodes, error } = moveStackNode(tree, 'A', { parentId: null, kind: 'after', refId: 'A' });
+    expect(error).toBeUndefined();
+    expect(nodes.map((n) => n.id)).toEqual(['A', 'grp1']);
   });
 });

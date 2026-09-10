@@ -1,17 +1,23 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// ShadeGraph — asset storage: connection + lazy tree store
+// ShadeGraph — asset storage: connections + lazy tree store
 // ───────────────────────────────────────────────────────────────────────────
-// Owns the one connected asset root end to end: picking/persisting the
-// directory handle, lazy per-folder listing, and preview object-URL
-// lifecycle. This is the ONLY place a `FileSystemDirectoryHandle` or a
-// `DirectoryReader` lives — `currentHandle`/`currentReader` are closure-
-// private to `createAssetStore`, not part of the exposed zustand state, so
-// there is no accessor path for UI code to reach a raw handle even by
-// accident. Panes only ever read `nodesById`/`rootIds` (`AssetTreeNode`,
-// `tree.ts`) and call the action methods.
+// Owns every connected asset root end to end: picking/persisting each
+// directory handle, its recursive-but-listing-only structural scan (see
+// `recognitionVisibility.ts`), and preview object-URL lifecycle. This is the
+// ONLY place a `FileSystemDirectoryHandle` or a `DirectoryReader` lives —
+// `rootRuntime` is closure-private to `createAssetStore`, not part of the
+// exposed zustand state, so there is no accessor path for UI code to reach a
+// raw handle even by accident. Panes only ever read `roots`
+// (`AssetRoot`/`AssetTreeNode`, `tree.ts`) and call the action methods, every
+// one of which now takes a `rootId` naming WHICH connected folder it targets.
+//
+// Multiple folders can be connected at once — the Assets panel's "Pages"-like
+// strip (`AssetBrowserPanel.tsx`) lists every entry in `roots` and lets the
+// user switch between/add/remove them independently. `connect()` ADDS a root
+// rather than replacing "the one connection" a single-root design would have.
 //
 // `createAssetStore(deps)` takes its `HandleStore`/`DirectoryReader`
-// factory/picker as arguments so the connect → list → expand → preview →
+// factory/picker as arguments so the connect → scan → expand → preview →
 // disconnect flow is unit-testable against in-memory fakes, without a real
 // File System Access API or IndexedDB (neither exists in this repo's Node
 // test environment). `useAssetStore` below is the one real, browser-backed
@@ -25,18 +31,9 @@ import { createNativeDirectoryReader } from './nativeDirectoryReader';
 import { createPreviewUrlManager, type PreviewUrlManager } from './previewUrls';
 import { recognizeShaderObjects, type RecognitionConfig } from './recognition';
 import { defaultRecognitionConfigId, getRecognitionConfigOption } from './recognitionConfigs';
+import { isRecognitionCandidate, scanRecognitionFilteredTree } from './recognitionVisibility';
 import { flattenVisibleTree, makeNode, nodeId, type AssetTreeNode } from './tree';
 import type { DirectoryReader, HandleStore } from './types';
-
-/** Extension pre-check only — never reads a file's text. Lets `recognizeNode`
- *  skip straight to `recognized: false` for files no config extension could
- *  ever match, without opening/reading them at all. */
-function isRecognitionCandidate(fileName: string, config: RecognitionConfig): boolean {
-  const extensions = [...(config.fileExtensions ?? []), ...(config.bundledExtensions ?? [])];
-  if (extensions.length === 0) return false;
-  const lower = fileName.toLowerCase();
-  return extensions.some((ext) => lower.endsWith(ext.toLowerCase()));
-}
 
 export type AssetConnectionStatus =
   | 'disconnected'
@@ -45,57 +42,83 @@ export type AssetConnectionStatus =
   | 'needsPermission'
   | 'error';
 
-export interface AssetStoreState {
+/** One connected (or connecting/erroring) folder. `id` is assigned once, at
+ *  `connect()`/`reconnectFromStorage()` time, and is also the key
+ *  `deps.handleStore` persists that folder's handle under — stable across a
+ *  reload so `reconnectFromStorage` can re-attach state to the same strip
+ *  entry rather than a fresh one. */
+export interface AssetRoot {
+  id: string;
   status: AssetConnectionStatus;
   rootName?: string;
   error?: string;
   nodesById: Record<string, AssetTreeNode>;
   rootIds: string[];
-  /** The config `recognizeNode` currently classifies files against. Seeded
-   *  from `deps.recognitionConfig` at store creation; swap it at runtime via
-   *  `setRecognitionConfig`. Already-recognized nodes (`recognized !==
-   *  undefined`) are NOT retroactively re-checked on a swap — only a fresh
-   *  `recognizeNode` call (e.g. a new connect/expand) sees the new config. */
+  /** `undefined` only while `status` is `'connecting'`/`'needsPermission'`/
+   *  `'error'` — populated together with `nodesById`/`rootIds` the moment the
+   *  recursive structural scan finishes and `status` becomes `'connected'`.
+   *  See `recognitionVisibility.ts`'s `scanRecognitionFilteredTree`. */
+  visibleIds?: Set<string>;
+}
+
+const EMPTY_NODES: Record<string, AssetTreeNode> = {};
+const EMPTY_ROOT_IDS: string[] = [];
+
+function previewKey(rootId: string, id: string): string {
+  return `${rootId}::${id}`;
+}
+
+export interface AssetStoreState {
+  roots: AssetRoot[];
+  /** The config `recognizeNode`/the structural scan currently classify files
+   *  against. Seeded from `deps.recognitionConfig` at store creation; swap it
+   *  at runtime via `setRecognitionConfig`. Already-connected roots are NOT
+   *  retroactively re-scanned on a swap (same precedent as already-recognized
+   *  nodes never being retroactively re-checked) — only a fresh
+   *  `connect()`/`reconnectFromStorage()` sees the new config. */
   recognitionConfig: RecognitionConfig;
 
-  /** Opens the native directory picker, persists the resulting handle, and
-   *  lists the top level. A no-op transition back to `disconnected` if the
-   *  user cancels the picker. */
+  /** Opens the native directory picker and ADDS a new connected root —
+   *  existing roots are untouched. A no-op (nothing added) if the user
+   *  cancels the picker. */
   connect: () => Promise<void>;
-  /** Called once at app boot: loads a previously-persisted handle (if any)
-   *  and checks its permission without prompting. Lands on `connected`
-   *  (permission already granted), `needsPermission` (persisted but not
-   *  yet re-granted — call `grantPermission` from a real click to resolve),
-   *  or `disconnected` (nothing persisted). */
+  /** Called once at app boot: loads every previously-persisted handle (if
+   *  any) and checks each one's permission without prompting. Safe to call
+   *  again later (e.g. the Assets pivot re-mounting) — a root whose `id` is
+   *  already in `roots` is left alone, never re-added. */
   reconnectFromStorage: () => Promise<void>;
-  /** Re-requests permission on the handle loaded by `reconnectFromStorage`.
+  /** Re-requests permission on the root loaded by `reconnectFromStorage`.
    *  Must be called from a user gesture (a click handler) — the File System
    *  Access API requires one for `requestPermission`. */
-  grantPermission: () => Promise<void>;
-  /** Forgets the connected root: revokes every outstanding preview URL,
-   *  clears the persisted handle, and resets the tree. */
-  disconnect: () => Promise<void>;
-  /** Expands/collapses a folder node, listing its children lazily on first
-   *  expand only. */
-  toggleExpand: (id: string) => Promise<void>;
+  grantPermission: (rootId: string) => Promise<void>;
+  /** Forgets ONE connected root: revokes every outstanding preview URL it
+   *  owns, clears its persisted handle, and removes it from `roots`. Other
+   *  connected roots are untouched. */
+  disconnect: (rootId: string) => Promise<void>;
+  /** Expands/collapses a folder node. Every folder's children were already
+   *  listed by the recursive structural scan at connect time, so this is
+   *  normally pure state (no I/O) — it only falls back to listing if a given
+   *  folder's `childIds` are somehow still unset (e.g. that subtree's scan
+   *  failed and was caught as empty; see `recognitionVisibility.ts`). */
+  toggleExpand: (rootId: string, id: string) => Promise<void>;
   /** Opens (and object-URLs) a file node's preview. Idempotent while already
    *  loading/loaded. */
-  loadPreview: (id: string) => Promise<void>;
+  loadPreview: (rootId: string, id: string) => Promise<void>;
   /** Releases a previously-loaded preview's object URL. Pairs 1:1 with a
    *  `loadPreview` call once the node scrolls out of the virtualized
    *  viewport — see `useVirtualRows.ts`'s visibility effect. */
-  releasePreview: (id: string) => void;
+  releasePreview: (rootId: string, id: string) => void;
   /** Runs shader-object recognition (`recognizeShaderObjects`) against one
    *  file node, on demand — lazily reading its text via the connected
    *  `DirectoryReader` only if its extension could possibly match
-   *  `deps.recognitionConfig`, then patching `nodesById[id].recognized`.
-   *  A no-op once the node has already been checked (`recognized !==
+   *  `deps.recognitionConfig`, then patching that node's `recognized`. A
+   *  no-op once the node has already been checked (`recognized !==
    *  undefined`), so it is safe to call repeatedly (e.g. from the same
    *  visibility effect that drives `loadPreview`). */
-  recognizeNode: (id: string) => Promise<void>;
-  /** Swaps the config `recognizeNode` matches against on its NEXT call.
-   *  Purely additive to already-checked nodes — see `recognitionConfig`'s
-   *  doc comment. */
+  recognizeNode: (rootId: string, id: string) => Promise<void>;
+  /** Swaps the config `recognizeNode` and future scans match against. Purely
+   *  additive to already-checked nodes/already-connected roots — see
+   *  `recognitionConfig`'s doc comment. */
   setRecognitionConfig: (config: RecognitionConfig) => void;
 }
 
@@ -104,129 +127,178 @@ export interface AssetStoreDeps {
   urlManager: PreviewUrlManager;
   pickDirectory: () => Promise<FileSystemDirectoryHandle>;
   createReader: (root: FileSystemDirectoryHandle) => DirectoryReader;
-  /** INITIAL config `recognizeNode` classifies files against — seeds the
-   *  store's `recognitionConfig` state once, at creation. Optional — defaults
-   *  to `{}` (nothing recognized) so existing/test deps that omit it keep
-   *  behaving exactly as before. Swap the active config later via the
-   *  store's `setRecognitionConfig` action, not by mutating this object. */
+  /** INITIAL config the structural scan/`recognizeNode` classify files
+   *  against — seeds the store's `recognitionConfig` state once, at creation.
+   *  Optional — defaults to `{}` (nothing recognized) so existing/test deps
+   *  that omit it keep behaving exactly as before. Swap the active config
+   *  later via the store's `setRecognitionConfig` action, not by mutating
+   *  this object. */
   recognitionConfig?: RecognitionConfig;
+}
+
+/** Generates a fresh, stable id for a newly connected root — also the key it
+ *  is persisted under in `deps.handleStore`. Not cryptographically unique,
+ *  just collision-resistant enough for one browser's connected-roots list
+ *  (same treatment as `src/model/ids.ts`'s node/layer id suffixes). */
+function makeRootId(): string {
+  return `assetroot_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function createAssetStore(deps: AssetStoreDeps) {
   // Closure-private — never exposed on the zustand state, so no UI code can
-  // reach a raw handle/reader through the store's public surface.
-  let currentHandle: FileSystemDirectoryHandle | undefined;
-  let currentReader: DirectoryReader | undefined;
+  // reach a raw handle/reader through the store's public surface. Keyed by
+  // `AssetRoot.id`, one entry per root that has (at some point) had its
+  // handle resolved — including one awaiting `grantPermission`, whose
+  // `reader` is only created once permission is actually granted.
+  const rootRuntime = new Map<string, { handle: FileSystemDirectoryHandle; reader?: DirectoryReader }>();
 
   return create<AssetStoreState>((set, get) => {
-    function patchNode(id: string, partial: Partial<AssetTreeNode>): void {
-      const node = get().nodesById[id];
-      if (!node) return;
-      set({ nodesById: { ...get().nodesById, [id]: { ...node, ...partial } } });
+    function updateRoot(rootId: string, partial: Partial<AssetRoot>): void {
+      const roots = get().roots;
+      const index = roots.findIndex((r) => r.id === rootId);
+      if (index === -1) return;
+      const nextRoots = [...roots];
+      nextRoots[index] = { ...nextRoots[index], ...partial };
+      set({ roots: nextRoots });
     }
 
-    async function activateRoot(handle: FileSystemDirectoryHandle): Promise<void> {
-      currentHandle = handle;
-      currentReader = deps.createReader(handle);
-      set({ status: 'connecting', rootName: handle.name, error: undefined });
+    function patchNode(rootId: string, id: string, partial: Partial<AssetTreeNode>): void {
+      const roots = get().roots;
+      const index = roots.findIndex((r) => r.id === rootId);
+      if (index === -1) return;
+      const root = roots[index];
+      const node = root.nodesById[id];
+      if (!node) return;
+      const nextRoots = [...roots];
+      nextRoots[index] = { ...root, nodesById: { ...root.nodesById, [id]: { ...node, ...partial } } };
+      set({ roots: nextRoots });
+    }
+
+    async function activateRoot(rootId: string, handle: FileSystemDirectoryHandle): Promise<void> {
+      const reader = deps.createReader(handle);
+      rootRuntime.set(rootId, { handle, reader });
+      updateRoot(rootId, { status: 'connecting', rootName: handle.name, error: undefined });
       try {
-        const entries = await currentReader.listEntries([]);
-        const nodesById: Record<string, AssetTreeNode> = {};
-        const rootIds: string[] = [];
-        for (const entry of entries) {
-          const node = makeNode([entry.name], entry.name, entry.kind);
-          nodesById[node.id] = node;
-          rootIds.push(node.id);
-        }
-        set({ status: 'connected', nodesById, rootIds });
+        const config = get().recognitionConfig;
+        const { nodesById, rootIds, visibleIds } = await scanRecognitionFilteredTree(reader, config);
+        // The root may have been disconnected, or reconnected against a
+        // different handle/reader, while this scan was in flight — only
+        // apply a stale scan's result if this is still the live reader.
+        if (rootRuntime.get(rootId)?.reader !== reader) return;
+        updateRoot(rootId, { status: 'connected', nodesById, rootIds, visibleIds });
       } catch (err) {
-        set({ status: 'error', error: err instanceof Error ? err.message : String(err) });
+        updateRoot(rootId, { status: 'error', error: err instanceof Error ? err.message : String(err) });
       }
     }
 
     return {
-      status: 'disconnected',
-      rootName: undefined,
-      error: undefined,
-      nodesById: {},
-      rootIds: [],
+      roots: [],
       recognitionConfig: deps.recognitionConfig ?? {},
 
       async connect() {
-        set({ status: 'connecting', error: undefined });
         let handle: FileSystemDirectoryHandle;
         try {
           handle = await deps.pickDirectory();
         } catch (err) {
-          // AbortError = the user dismissed the picker — not a failure.
-          if (err instanceof DOMException && err.name === 'AbortError') {
-            set({ status: 'disconnected' });
-            return;
-          }
-          set({ status: 'error', error: err instanceof Error ? err.message : String(err) });
+          // AbortError = the user dismissed the picker — not a failure, and
+          // nothing is added (unlike a real listing failure, there is no
+          // handle to show an error entry for).
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+          const rootId = makeRootId();
+          set({
+            roots: [
+              ...get().roots,
+              {
+                id: rootId,
+                status: 'error',
+                error: err instanceof Error ? err.message : String(err),
+                nodesById: EMPTY_NODES,
+                rootIds: EMPTY_ROOT_IDS,
+              },
+            ],
+          });
           return;
         }
-        await deps.handleStore.save(handle);
-        await activateRoot(handle);
+        const rootId = makeRootId();
+        set({
+          roots: [
+            ...get().roots,
+            { id: rootId, status: 'connecting', rootName: handle.name, nodesById: EMPTY_NODES, rootIds: EMPTY_ROOT_IDS },
+          ],
+        });
+        await deps.handleStore.save(rootId, handle);
+        await activateRoot(rootId, handle);
       },
 
       async reconnectFromStorage() {
-        set({ status: 'connecting', error: undefined });
-        const handle = await deps.handleStore.load();
-        if (!handle) {
-          set({ status: 'disconnected' });
-          return;
+        const stored = await deps.handleStore.loadAll();
+        const existingIds = new Set(get().roots.map((r) => r.id));
+        for (const { id, handle } of stored) {
+          // Idempotent: a root already present (this ran before, e.g. the
+          // Assets pivot re-mounting) is left exactly as-is, never re-added.
+          if (existingIds.has(id)) continue;
+          set({
+            roots: [
+              ...get().roots,
+              { id, status: 'connecting', rootName: handle.name, nodesById: EMPTY_NODES, rootIds: EMPTY_ROOT_IDS },
+            ],
+          });
+          const permission = await handle.queryPermission({ mode: 'read' });
+          if (permission === 'granted') {
+            await activateRoot(id, handle);
+          } else {
+            rootRuntime.set(id, { handle });
+            updateRoot(id, { status: 'needsPermission', rootName: handle.name });
+          }
         }
-        const permission = await handle.queryPermission({ mode: 'read' });
+      },
+
+      async grantPermission(rootId) {
+        const runtime = rootRuntime.get(rootId);
+        if (!runtime) return;
+        const permission = await runtime.handle.requestPermission({ mode: 'read' });
         if (permission === 'granted') {
-          await activateRoot(handle);
+          await activateRoot(rootId, runtime.handle);
         } else {
-          currentHandle = handle;
-          set({ status: 'needsPermission', rootName: handle.name });
+          updateRoot(rootId, { status: 'error', error: 'Permission to read the folder was not granted.' });
         }
       },
 
-      async grantPermission() {
-        if (!currentHandle) return;
-        const permission = await currentHandle.requestPermission({ mode: 'read' });
-        if (permission === 'granted') {
-          await activateRoot(currentHandle);
-        } else {
-          set({ status: 'error', error: 'Permission to read the folder was not granted.' });
+      async disconnect(rootId) {
+        const root = get().roots.find((r) => r.id === rootId);
+        if (root) {
+          for (const node of Object.values(root.nodesById)) {
+            if (node.previewState === 'loaded') deps.urlManager.release(previewKey(rootId, node.id));
+          }
         }
+        rootRuntime.delete(rootId);
+        await deps.handleStore.remove(rootId);
+        set({ roots: get().roots.filter((r) => r.id !== rootId) });
       },
 
-      async disconnect() {
-        deps.urlManager.releaseAll();
-        currentHandle = undefined;
-        currentReader = undefined;
-        await deps.handleStore.clear();
-        set({
-          status: 'disconnected',
-          rootName: undefined,
-          error: undefined,
-          nodesById: {},
-          rootIds: [],
-        });
-      },
-
-      async toggleExpand(id) {
-        const node = get().nodesById[id];
-        if (!node || node.kind !== 'folder' || !currentReader) return;
+      async toggleExpand(rootId, id) {
+        const root = get().roots.find((r) => r.id === rootId);
+        const node = root?.nodesById[id];
+        const reader = rootRuntime.get(rootId)?.reader;
+        if (!root || !node || node.kind !== 'folder' || !reader) return;
 
         if (node.expanded) {
-          patchNode(id, { expanded: false });
+          patchNode(rootId, id, { expanded: false });
           return;
         }
         if (node.childIds !== undefined) {
-          patchNode(id, { expanded: true });
+          patchNode(rootId, id, { expanded: true });
           return;
         }
 
-        patchNode(id, { loadingChildren: true });
+        // Defensive fallback only — the recursive structural scan normally
+        // already populated every folder's `childIds` at connect time.
+        patchNode(rootId, id, { loadingChildren: true });
         try {
-          const entries = await currentReader.listEntries(node.path);
+          const entries = await reader.listEntries(node.path);
           const childIds: string[] = [];
+          const nextRoot = get().roots.find((r) => r.id === rootId);
+          if (!nextRoot) return; // root vanished while awaiting
           const additions: Record<string, AssetTreeNode> = {};
           for (const entry of entries) {
             const childPath = [...node.path, entry.name];
@@ -234,57 +306,68 @@ export function createAssetStore(deps: AssetStoreDeps) {
             additions[child.id] = child;
             childIds.push(child.id);
           }
-          set({ nodesById: { ...get().nodesById, ...additions } });
-          patchNode(id, { childIds, loadingChildren: false, expanded: true });
+          const roots = get().roots;
+          const index = roots.findIndex((r) => r.id === rootId);
+          if (index === -1) return;
+          const merged = { ...roots[index].nodesById, ...additions };
+          const nextRoots = [...roots];
+          nextRoots[index] = { ...roots[index], nodesById: merged };
+          set({ roots: nextRoots });
+          patchNode(rootId, id, { childIds, loadingChildren: false, expanded: true });
         } catch (err) {
-          patchNode(id, { loadingChildren: false });
-          set({ error: err instanceof Error ? err.message : String(err) });
+          patchNode(rootId, id, { loadingChildren: false });
+          updateRoot(rootId, { error: err instanceof Error ? err.message : String(err) });
         }
       },
 
-      async loadPreview(id) {
-        const node = get().nodesById[id];
-        if (!node || node.kind !== 'file' || !currentReader) return;
+      async loadPreview(rootId, id) {
+        const root = get().roots.find((r) => r.id === rootId);
+        const node = root?.nodesById[id];
+        const reader = rootRuntime.get(rootId)?.reader;
+        if (!root || !node || node.kind !== 'file' || !reader) return;
         if (node.previewState === 'loading' || node.previewState === 'loaded') return;
 
-        patchNode(id, { previewState: 'loading' });
+        patchNode(rootId, id, { previewState: 'loading' });
         try {
-          const source = await currentReader.openPreview(node.path);
-          if (!get().nodesById[id]) return; // node vanished while awaiting
+          const source = await reader.openPreview(node.path);
+          if (!get().roots.find((r) => r.id === rootId)?.nodesById[id]) return; // node vanished while awaiting
           if (!source) {
-            patchNode(id, { previewState: 'unavailable' });
+            patchNode(rootId, id, { previewState: 'unavailable' });
             return;
           }
-          const url = deps.urlManager.acquire(id, source.blob);
-          patchNode(id, { previewState: 'loaded', preview: url, previewKind: source.kind });
+          const url = deps.urlManager.acquire(previewKey(rootId, id), source.blob);
+          patchNode(rootId, id, { previewState: 'loaded', preview: url, previewKind: source.kind });
         } catch {
-          patchNode(id, { previewState: 'unavailable' });
+          patchNode(rootId, id, { previewState: 'unavailable' });
         }
       },
 
-      releasePreview(id) {
-        const node = get().nodesById[id];
+      releasePreview(rootId, id) {
+        const root = get().roots.find((r) => r.id === rootId);
+        const node = root?.nodesById[id];
         if (!node || node.previewState !== 'loaded') return;
-        deps.urlManager.release(id);
-        patchNode(id, { previewState: 'idle', preview: undefined, previewKind: undefined });
+        deps.urlManager.release(previewKey(rootId, id));
+        patchNode(rootId, id, { previewState: 'idle', preview: undefined, previewKind: undefined });
       },
 
-      async recognizeNode(id) {
-        const node = get().nodesById[id];
-        if (!node || node.kind !== 'file' || !currentReader) return;
+      async recognizeNode(rootId, id) {
+        const root = get().roots.find((r) => r.id === rootId);
+        const node = root?.nodesById[id];
+        const reader = rootRuntime.get(rootId)?.reader;
+        if (!root || !node || node.kind !== 'file' || !reader) return;
         if (node.recognized !== undefined) return; // already checked
 
         const config = get().recognitionConfig;
         if (!isRecognitionCandidate(node.name, config)) {
-          patchNode(id, { recognized: false });
+          patchNode(rootId, id, { recognized: false });
           return;
         }
 
         try {
-          const text = await currentReader.readText(node.path);
-          if (!get().nodesById[id]) return; // node vanished while awaiting
+          const text = await reader.readText(node.path);
+          if (!get().roots.find((r) => r.id === rootId)?.nodesById[id]) return; // node vanished while awaiting
           if (text === undefined) {
-            patchNode(id, { recognized: false });
+            patchNode(rootId, id, { recognized: false });
             return;
           }
           const objects = recognizeShaderObjects([node], { [id]: text }, config);
@@ -292,12 +375,12 @@ export function createAssetStore(deps: AssetStoreDeps) {
             // Keep the objects + the exact text they came from, so a
             // "graph this" action can call `graphFromRecognizedObject`
             // directly off this node without re-reading/re-recognizing.
-            patchNode(id, { recognized: true, recognizedObjects: objects, sourceText: text });
+            patchNode(rootId, id, { recognized: true, recognizedObjects: objects, sourceText: text });
           } else {
-            patchNode(id, { recognized: false });
+            patchNode(rootId, id, { recognized: false });
           }
         } catch {
-          patchNode(id, { recognized: false });
+          patchNode(rootId, id, { recognized: false });
         }
       },
 

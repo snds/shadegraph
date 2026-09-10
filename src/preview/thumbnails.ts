@@ -30,9 +30,9 @@ import type {
   TargetLang,
 } from '../compiler/backend';
 import { backends } from '../compiler/backend';
-import type { ScalarOrVector, ShaderDocument, ShaderGraph, ShaderLayer } from '../model/document';
-import { findLayerOwningNode, flattenLayers } from '../model/layerTree';
-import type { ThumbnailRequest } from './scheduler';
+import type { ScalarOrVector, ShaderDocument, ShaderGraph, ShaderLayer, StackNode } from '../model/document';
+import { allStackNodes, ancestorGroupIds, findLayerOwningNode, flattenLayers } from '../model/layerTree';
+import type { AssetThumbnailRequest, StackThumbnailRequest, ThumbnailRequest } from './scheduler';
 import { toThreeUniformValue } from './renderer';
 
 // ── Pure helpers (no GPU, no DOM — directly unit-testable) ─────────────────
@@ -49,6 +49,22 @@ export function snapThumbnailSize(requested: number | undefined): number {
 
 function findLayerContaining(doc: ShaderDocument, nodeId: string): ShaderLayer | undefined {
   return findLayerOwningNode(doc.layerStack.layers, nodeId);
+}
+
+/** A cheap structural fingerprint of one `StackNode`'s OWN
+ *  compositing-relevant fields — everything a Layers-panel row's thumbnail
+ *  depends on that a per-node `changedNodeIds` diff can never see (blend/
+ *  opacity/enabled/visible/soloed/mask-presence, and for a group, its
+ *  children's identity + order). Two documents produce the same string iff
+ *  this node would compile to the identical `previewLayerId` output —
+ *  `ThumbnailScheduler.onDocument` diffs this per stack node, every call, to
+ *  drive stack-thumbnail dirtiness the same way `diffChangedNodeIds` drives
+ *  per-node dirtiness. */
+function stackNodeSignature(node: StackNode): string {
+  const base = `${node.kind}|${node.blend}|${node.opacity}|${node.enabled}|${node.visible}|${node.soloed ?? false}|${
+    node.maskGraph ? 1 : 0
+  }`;
+  return node.kind === 'group' ? `${base}|${node.children.map((c) => c.id).join(',')}` : base;
 }
 
 function allNodeIds(doc: ShaderDocument): Set<string> {
@@ -244,6 +260,18 @@ export type CompileGraphFn = (
   opts: CompileOptions,
 ) => CompiledProgram;
 
+/** Compiles a whole DOCUMENT slice — what a Layers-panel row's thumbnail
+ *  needs (`{ previewLayerId: stackNodeId }`, leaf OR group — see
+ *  `CompileOptions.previewLayerId`), unlike `CompileGraphFn`'s bare
+ *  `ShaderGraph` (a single node's SOLO preview, always scoped to one leaf's
+ *  own graph). A group has no single `ShaderGraph` of its own to hand
+ *  `compileGraph`; only `compileDocument` can fold an arbitrary subtree. */
+export type CompileDocumentFn = (
+  doc: ShaderDocument,
+  target: TargetLang,
+  opts: CompileOptions,
+) => CompiledProgram;
+
 /** The slice of `ThumbnailScheduler` `PreviewRenderer` depends on, so
  *  `renderer.test.ts` can inject a plain fake without touching THREE or the
  *  DOM at all (same pattern as `GpuBinding`). */
@@ -253,6 +281,20 @@ export interface ThumbnailHost {
   markAllDirty(): void;
   setVisibleNodes(nodeIds: string[]): void;
   request(req: ThumbnailRequest): Promise<HTMLCanvasElement>;
+  /** The Layers-panel counterpart of `setVisibleNodes`/`request`: one
+   *  thumbnail per STACK NODE (leaf layer or group), keyed by that node's own
+   *  id rather than a node-inside-a-graph id — a disjoint id space and a
+   *  disjoint dirty/visible/budget tracker, so panel scrolling never starves
+   *  (or is starved by) the graph canvas's per-node thumbnails. */
+  setVisibleStackNodes(ids: string[]): void;
+  requestStack(req: StackThumbnailRequest): Promise<HTMLCanvasElement>;
+  /** The Assets-panel counterpart of `setVisibleNodes`/`setVisibleStackNodes`:
+   *  a THIRD, disjoint id space (caller-assigned `AssetThumbnailRequest.key`
+   *  strings, never a real graph/stack node id) for auto-graphed per-file
+   *  thumbnails — see `renderer.ts`'s `PreviewScheduler.setVisibleAssetThumbnails`. */
+  setVisibleAssetThumbnails(keys: string[]): void;
+  requestAsset(req: AssetThumbnailRequest): Promise<HTMLCanvasElement>;
+  releaseAsset(key: string): void;
   setBudget(msPerFrame: number): void;
   dispose(): void;
 }
@@ -269,8 +311,24 @@ interface ThumbnailEntry {
   waiters: Waiter[];
 }
 
+/** `ThumbnailEntry` plus what an Assets-panel row's own throwaway document
+ *  needs: the document itself (compiled fresh whenever `dirty`, never
+ *  diffed/topology-signatured the way the main document is — there is
+ *  nothing to diff against, each request may hand a brand-new document
+ *  object) and the content signature that last caused a render, so a
+ *  same-signature request short-circuits to the cached canvas exactly like
+ *  an unchanged `entries`/`stackEntries` row does. */
+interface AssetThumbnailEntry extends ThumbnailEntry {
+  doc: ShaderDocument;
+  signature: string;
+}
+
 export interface ThumbnailSchedulerDeps {
   compile?: CompileGraphFn;
+  /** Defaults to `backends.get(target).compileDocument(doc, opts)`. Only
+   *  ever called with `{ previewLayerId: <stack node id> }` — see
+   *  `renderOneStack`. */
+  compileDocument?: CompileDocumentFn;
   createCanvas?: () => HTMLCanvasElement;
   scheduleFrame?: (cb: () => void) => number;
   cancelFrame?: (handle: number) => void;
@@ -279,13 +337,38 @@ export interface ThumbnailSchedulerDeps {
 
 /** Owns per-node dirty/visible/budget bookkeeping and the promise-based
  *  `requestThumbnail` contract; delegates the actual pixels to a `ThumbnailGpu`
- *  so this class is fully unit-testable with a fake one. */
+ *  so this class is fully unit-testable with a fake one.
+ *
+ *  Per-STACK-NODE (Layers panel) thumbnails are a second, parallel tracker
+ *  (`stackEntries`/`stackVisible`/`stackSignatures`) inside this SAME class,
+ *  and per-ASSET (Assets panel, auto-graphed file previews) thumbnails are a
+ *  THIRD (`assetEntries`/`assetVisible`) — all three sharing the one
+ *  `ThumbnailGpu`/render-target pool and the one dirty+visible+budget
+ *  scheduling loop, per AGENTS.md ("one shared renderer... never a second
+ *  preview path"), while staying disjoint id spaces so none of the three
+ *  trackers can ever collide with or starve either of the others. */
 export class ThumbnailScheduler implements ThumbnailHost {
   private doc: ShaderDocument | null = null;
   private target: TargetLang = 'glsl-es';
   private budgetMs = 8;
   private visible = new Set<string>();
   private entries = new Map<string, ThumbnailEntry>();
+  private stackVisible = new Set<string>();
+  private stackEntries = new Map<string, ThumbnailEntry>();
+  /** The last `stackNodeSignature` seen for every stack node, so `onDocument`
+   *  can diff structural (blend/opacity/enabled/visible/soloed/mask/
+   *  membership) changes that no `changedNodeIds` entry would ever capture. */
+  private stackSignatures = new Map<string, string>();
+  /** THIRD, disjoint tracker: one entry per Assets-panel row (keyed by the
+   *  caller's own `AssetThumbnailRequest.key`), each carrying its OWN
+   *  throwaway `ShaderDocument` + content signature rather than referencing
+   *  `this.doc` — completely independent of whatever document the main
+   *  viewer/Layers panel are currently editing. Shares the same
+   *  `gpu`/render-target pool and the same dirty+visible+budget `tick()` loop
+   *  as `entries`/`stackEntries` (one shared renderer, per AGENTS.md), never
+   *  a second scheduling path. */
+  private assetVisible = new Set<string>();
+  private assetEntries = new Map<string, AssetThumbnailEntry>();
   private frameHandle: number | null = null;
   /** Gates `kick()` independently of `frameHandle`'s VALUE, deliberately —
    *  `scheduleFrame` returns a handle synchronously for real `rAF`, but a
@@ -296,6 +379,7 @@ export class ThumbnailScheduler implements ThumbnailHost {
   private scheduled = false;
 
   private readonly compile: CompileGraphFn;
+  private readonly compileDocument: CompileDocumentFn;
   private readonly createCanvas: () => HTMLCanvasElement;
   private readonly scheduleFrame: (cb: () => void) => number;
   private readonly cancelFrame: (handle: number) => void;
@@ -306,6 +390,7 @@ export class ThumbnailScheduler implements ThumbnailHost {
     deps: ThumbnailSchedulerDeps = {},
   ) {
     this.compile = deps.compile ?? ((graph, target, opts) => backends.get(target).compileGraph(graph, opts));
+    this.compileDocument = deps.compileDocument ?? ((doc, target, opts) => backends.get(target).compileDocument(doc, opts));
     this.createCanvas = deps.createCanvas ?? (() => document.createElement('canvas'));
     this.scheduleFrame = deps.scheduleFrame ?? ((cb) => requestAnimationFrame(cb));
     this.cancelFrame = deps.cancelFrame ?? ((handle) => cancelAnimationFrame(handle));
@@ -313,13 +398,17 @@ export class ThumbnailScheduler implements ThumbnailHost {
   }
 
   /** Called on every `PreviewRenderer.setDocument`: records the latest doc,
-   *  propagates dirtiness for `changedNodeIds` (+ their downstream subtree),
-   *  and drops tracking for any node that no longer exists. */
+   *  propagates dirtiness for `changedNodeIds` (+ their downstream subtree,
+   *  and every stack node it lives inside), diffs stack-node signatures to
+   *  catch every OTHER stack-relevant change, and drops tracking for any
+   *  node/stack-node that no longer exists. */
   onDocument(doc: ShaderDocument, target: TargetLang, changedNodeIds: Set<string>): void {
     this.doc = doc;
     if (target !== this.target) {
       this.target = target;
       for (const entry of this.entries.values()) entry.dirty = true;
+      for (const entry of this.stackEntries.values()) entry.dirty = true;
+      for (const entry of this.assetEntries.values()) entry.dirty = true;
     }
     for (const nodeId of changedNodeIds) this.propagateDirty(nodeId);
 
@@ -330,6 +419,22 @@ export class ThumbnailScheduler implements ThumbnailHost {
         this.entries.delete(id);
       }
     }
+
+    const stackNodes = allStackNodes(doc.layerStack.layers);
+    const nextSignatures = new Map(stackNodes.map((n) => [n.id, stackNodeSignature(n)]));
+    for (const n of stackNodes) {
+      if (this.stackSignatures.get(n.id) !== nextSignatures.get(n.id)) {
+        this.markStackDirtyWithAncestors(doc.layerStack.layers, n.id);
+      }
+    }
+    for (const [id, entry] of [...this.stackEntries]) {
+      if (!nextSignatures.has(id)) {
+        this.rejectAll(entry, new Error(`Layer "${id}" no longer exists.`));
+        this.stackEntries.delete(id);
+      }
+    }
+    this.stackSignatures = nextSignatures;
+
     this.kick();
   }
 
@@ -340,6 +445,8 @@ export class ThumbnailScheduler implements ThumbnailHost {
 
   markAllDirty(): void {
     for (const entry of this.entries.values()) entry.dirty = true;
+    for (const entry of this.stackEntries.values()) entry.dirty = true;
+    for (const entry of this.assetEntries.values()) entry.dirty = true;
     this.kick();
   }
 
@@ -348,16 +455,93 @@ export class ThumbnailScheduler implements ThumbnailHost {
     this.kick();
   }
 
+  setVisibleStackNodes(ids: string[]): void {
+    this.stackVisible = new Set(ids);
+    this.kick();
+  }
+
+  setVisibleAssetThumbnails(keys: string[]): void {
+    this.assetVisible = new Set(keys);
+    this.kick();
+  }
+
   setBudget(msPerFrame: number): void {
     this.budgetMs = Math.max(0, msPerFrame);
   }
 
   request(req: ThumbnailRequest): Promise<HTMLCanvasElement> {
+    return this.requestFrom(this.entries, req.nodeId, req.size);
+  }
+
+  requestStack(req: StackThumbnailRequest): Promise<HTMLCanvasElement> {
+    return this.requestFrom(this.stackEntries, req.id, req.size);
+  }
+
+  requestAsset(req: AssetThumbnailRequest): Promise<HTMLCanvasElement> {
     const size = snapThumbnailSize(req.size);
-    let entry = this.entries.get(req.nodeId);
+    let entry = this.assetEntries.get(req.key);
+    if (!entry) {
+      entry = { size, dirty: true, canvas: null, waiters: [], doc: req.doc, signature: req.signature };
+      this.assetEntries.set(req.key, entry);
+    } else {
+      // The signature (not `req.doc` itself — a caller may rebuild an
+      // equivalent document object every call) is the ONLY thing that
+      // re-dirties an already-rendered entry, per `AssetThumbnailRequest`'s
+      // own doc comment. `entry.doc` is still refreshed unconditionally so a
+      // genuine re-render (dirty for any reason) always compiles the LATEST
+      // document a caller handed in, never a stale one from the first call.
+      entry.doc = req.doc;
+      if (entry.signature !== req.signature) {
+        entry.signature = req.signature;
+        entry.dirty = true;
+      }
+      if (size !== entry.size) {
+        entry.size = size;
+        entry.dirty = true;
+      }
+    }
+
+    if (!entry.dirty && entry.canvas) return Promise.resolve(entry.canvas);
+
+    const pending = entry;
+    return new Promise<HTMLCanvasElement>((resolve, reject) => {
+      pending.waiters.push({ resolve, reject });
+      this.kick();
+    });
+  }
+
+  releaseAsset(key: string): void {
+    const entry = this.assetEntries.get(key);
+    if (!entry) return;
+    this.rejectAll(entry, new Error(`Asset thumbnail "${key}" released.`));
+    this.assetEntries.delete(key);
+  }
+
+  dispose(): void {
+    if (this.frameHandle !== null) this.cancelFrame(this.frameHandle);
+    this.frameHandle = null;
+    this.scheduled = false;
+    for (const entry of this.entries.values()) this.rejectAll(entry, new Error('ThumbnailScheduler disposed.'));
+    this.entries.clear();
+    for (const entry of this.stackEntries.values()) this.rejectAll(entry, new Error('ThumbnailScheduler disposed.'));
+    this.stackEntries.clear();
+    for (const entry of this.assetEntries.values()) this.rejectAll(entry, new Error('ThumbnailScheduler disposed.'));
+    this.assetEntries.clear();
+    this.gpu.dispose();
+  }
+
+  // ── Internals ──────────────────────────────────────────────────────────
+
+  private requestFrom(
+    entries: Map<string, ThumbnailEntry>,
+    id: string,
+    requestedSize: number | undefined,
+  ): Promise<HTMLCanvasElement> {
+    const size = snapThumbnailSize(requestedSize);
+    let entry = entries.get(id);
     if (!entry) {
       entry = { size, dirty: true, canvas: null, waiters: [] };
-      this.entries.set(req.nodeId, entry);
+      entries.set(id, entry);
     } else if (size !== entry.size) {
       entry.size = size;
       entry.dirty = true;
@@ -372,17 +556,6 @@ export class ThumbnailScheduler implements ThumbnailHost {
     });
   }
 
-  dispose(): void {
-    if (this.frameHandle !== null) this.cancelFrame(this.frameHandle);
-    this.frameHandle = null;
-    this.scheduled = false;
-    for (const entry of this.entries.values()) this.rejectAll(entry, new Error('ThumbnailScheduler disposed.'));
-    this.entries.clear();
-    this.gpu.dispose();
-  }
-
-  // ── Internals ──────────────────────────────────────────────────────────
-
   private propagateDirty(nodeId: string): void {
     if (!this.doc) {
       const entry = this.entries.get(nodeId);
@@ -395,11 +568,33 @@ export class ThumbnailScheduler implements ThumbnailHost {
       const entry = this.entries.get(id);
       if (entry) entry.dirty = true;
     }
+    // The owning leaf's own thumbnail (and every group that folds it in) is
+    // also affected by a change to any node inside its graph.
+    if (layer) this.markStackDirtyWithAncestors(this.doc.layerStack.layers, layer.id);
+  }
+
+  /** Marks `id`'s OWN stack thumbnail dirty (if tracked) plus every group
+   *  that transitively contains it — a change anywhere inside a subtree
+   *  invalidates every ancestor's already-folded composite, not just the
+   *  node itself (see `LayerGroup`'s own doc comment on `foldStack`). */
+  private markStackDirtyWithAncestors(layers: readonly StackNode[], id: string): void {
+    const entry = this.stackEntries.get(id);
+    if (entry) entry.dirty = true;
+    for (const ancestorId of ancestorGroupIds(layers, id)) {
+      const ancestorEntry = this.stackEntries.get(ancestorId);
+      if (ancestorEntry) ancestorEntry.dirty = true;
+    }
   }
 
   private hasPendingWork(): boolean {
     for (const [id, entry] of this.entries) {
       if (entry.dirty && entry.waiters.length > 0 && this.visible.has(id)) return true;
+    }
+    for (const [id, entry] of this.stackEntries) {
+      if (entry.dirty && entry.waiters.length > 0 && this.stackVisible.has(id)) return true;
+    }
+    for (const [id, entry] of this.assetEntries) {
+      if (entry.dirty && entry.waiters.length > 0 && this.assetVisible.has(id)) return true;
     }
     return false;
   }
@@ -417,6 +612,16 @@ export class ThumbnailScheduler implements ThumbnailHost {
     for (const [id, entry] of this.entries) {
       if (!entry.dirty || entry.waiters.length === 0 || !this.visible.has(id)) continue;
       this.renderOne(id, entry);
+      if (this.now() - start >= this.budgetMs) break;
+    }
+    for (const [id, entry] of this.stackEntries) {
+      if (!entry.dirty || entry.waiters.length === 0 || !this.stackVisible.has(id)) continue;
+      this.renderOneStack(id, entry);
+      if (this.now() - start >= this.budgetMs) break;
+    }
+    for (const [id, entry] of this.assetEntries) {
+      if (!entry.dirty || entry.waiters.length === 0 || !this.assetVisible.has(id)) continue;
+      this.renderOneAsset(entry);
       if (this.now() - start >= this.budgetMs) break;
     }
     if (this.hasPendingWork()) this.kick();
@@ -443,11 +648,58 @@ export class ThumbnailScheduler implements ThumbnailHost {
       return;
     }
 
+    this.finishRenderFromCompile(entry, compiled);
+  }
+
+  /** The stack-node (leaf layer OR group) counterpart of `renderOne`:
+   *  compiles the WHOLE document isolated to just this one node's subtree
+   *  (`CompileOptions.previewLayerId`, generalized in both backends to accept
+   *  a group id — see `glsl-es.ts`/`wgsl.ts`), rather than one node inside a
+   *  single graph. */
+  private renderOneStack(id: string, entry: ThumbnailEntry): void {
+    if (!this.doc) return;
+
+    let compiled: CompiledProgram;
+    try {
+      compiled = this.compileDocument(this.doc, this.target, {
+        previewLayerId: id,
+        subGraphs: this.doc.subGraphs,
+      });
+    } catch (err) {
+      entry.dirty = false;
+      this.rejectAll(entry, err);
+      return;
+    }
+
+    this.finishRenderFromCompile(entry, compiled);
+  }
+
+  /** The Assets-panel counterpart of `renderOne`/`renderOneStack`: compiles
+   *  `entry.doc` — a caller-built, SELF-CONTAINED throwaway document — as a
+   *  full composite (`compileDocument(doc, target, {})`, no `previewLayerId`/
+   *  `previewNodeId`; the document's own single base layer/graph output IS
+   *  what the row's thumbnail should show), never anything derived from
+   *  `this.doc`. */
+  private renderOneAsset(entry: AssetThumbnailEntry): void {
+    let compiled: CompiledProgram;
+    try {
+      compiled = this.compileDocument(entry.doc, this.target, { subGraphs: entry.doc.subGraphs });
+    } catch (err) {
+      entry.dirty = false;
+      this.rejectAll(entry, err);
+      return;
+    }
+
+    this.finishRenderFromCompile(entry, compiled);
+  }
+
+  /** Shared tail of `renderOne`/`renderOneStack`, once a `CompiledProgram`
+   *  exists: surface a compile error (resolving with the last-good frame if
+   *  there is one, so a transient mid-edit invalid graph never hangs a
+   *  waiter forever), otherwise render into the entry's pooled canvas. */
+  private finishRenderFromCompile(entry: ThumbnailEntry, compiled: CompiledProgram): void {
     const errors = compiled.diagnostics.filter((d) => d.level === 'error');
     if (errors.length > 0) {
-      // A transient invalid graph (e.g. mid-edit cycle): stop retrying until
-      // the next real edit re-marks it dirty, and never hang a waiter forever
-      // — resolve with the last-good frame if there is one.
       entry.dirty = false;
       if (entry.canvas) this.resolveAll(entry, entry.canvas);
       else this.rejectAll(entry, new Error(errors.map((e) => e.message).join('; ')));

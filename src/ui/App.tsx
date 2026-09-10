@@ -3,12 +3,12 @@
 // ───────────────────────────────────────────────────────────────────────────
 //   ┌──────────────────────── DocToolbar ────────────────────────┐
 //   ├──────┬─────────────┬───────────────────────────┬───────────┤
-//   │ Rail │ Panel host  │        GraphCanvas         │ Inspector │
-//   │ (Layers/Assets/    │  React Flow · typed sockets│ params of │
-//   │  Nodes/Manifest/   │  · reserved thumbnail area │ selection │
-//   │  Critique pivots)  │                             │           │
+//   │ Rail │ Panel host  │   MainContentRegion:       │ Inspector │
+//   │ (Layers/Assets/    │   GraphCanvas + MainViewer,│ params of │
+//   │  Nodes/Manifest/   │   dockable top/bottom      │ selection │
+//   │  Critique pivots)  │   (React Flow above/below   │           │
+//   │                    │    the real compiled preview)│          │
 //   ├──────┴─────────────┴───────────────────────────┴───────────┤
-//   │                    Main viewer (Phase 2)                    │
 //   └─────────────────────────────────────────────────────────────┘
 //
 // This file is a MOUNT POINT ONLY and is deliberately dumb. Each pane is a
@@ -19,19 +19,23 @@
 // `Shell` (`src/ui/shell/`) replaces the old static `<LayerStack />` column:
 // it renders the collapsible left pivot rail plus a panel host that mounts
 // whichever pivot (Layers/Assets/Nodes/Manifest/Critique) is active.
-// `GraphCanvas`/`Inspector` stay untouched siblings — this only changed what
-// CONTAINS them, never their internals.
+// `Inspector` stays an untouched sibling — this only changed what CONTAINS
+// the panes, never their internals.
 //
-// The main viewer (Phase 2) is the one exception to "never touch this file":
-// Phase 1 deliberately reserved the footer as an empty placeholder for
-// exactly this, since previews must run the real compiled target program
-// (`MainViewer` → `src/preview/renderer.ts`), not a fake stand-in drawn here.
+// `GraphCanvas` and `MainViewer` used to be mounted directly here (the latter
+// as a full-width footer under everything — Phase 1's reserved placeholder
+// for the real compiled preview, since previews must run the real compiled
+// target program, `MainViewer` → `src/preview/renderer.ts`, not a fake
+// stand-in drawn here). `MainContentRegion` now owns combining the two into
+// one dockable column; both are still passed in as plain elements, so
+// neither component's internals changed for this either.
 
 import { registerStarterNodes } from '../nodes/definitions';
 import { CodePanel } from './codepanel/CodePanel';
 import { DocToolbar } from './DocToolbar';
 import { GraphCanvas } from './graph/GraphCanvas';
 import { Inspector } from './inspector/Inspector';
+import { MainContentRegion } from './MainContentRegion';
 import { NoticeToast } from './NoticeToast';
 import { bridgeStoreErrors } from './notice';
 import { Shell } from './shell/Shell';
@@ -48,10 +52,9 @@ export function App() {
       <DocToolbar />
       <main className="sg-body">
         <Shell />
-        <GraphCanvas />
+        <MainContentRegion graph={<GraphCanvas />} viewer={<MainViewer />} />
         <Inspector />
       </main>
-      <MainViewer />
       <NoticeToast />
       <CodePanel />
     </div>

@@ -15,6 +15,40 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* Connected-folders strip — one entry per `AssetRoot`, Figma's Layers-panel
+   "Pages" tab pattern: a row of named entries you switch between, each with
+   its own remove ("×"), plus a trailing "+" to connect another folder. */
+.sg-assets-strip {
+  display: flex; align-items: center; gap: 2px; padding: 4px 6px;
+  border-bottom: 1px solid var(--sg-line); background: var(--sg-panel);
+  overflow-x: auto; flex: none;
+}
+.sg-assets-strip__item {
+  display: flex; align-items: center; flex: none; max-width: 140px;
+  border-radius: var(--sg-radius); background: transparent;
+}
+.sg-assets-strip__item--active { background: var(--sg-raised); }
+.sg-assets-strip__label {
+  font: inherit; font-size: 11px; color: var(--sg-dim); background: transparent;
+  border: 0; cursor: pointer; padding: 4px 4px 4px 8px; display: flex; align-items: center; gap: 4px;
+  overflow: hidden; min-width: 0;
+}
+.sg-assets-strip__item--active .sg-assets-strip__label { color: var(--sg-text); }
+.sg-assets-strip__label .sg-icon { font-size: 12px; flex: none; }
+.sg-assets-strip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sg-assets-strip__remove {
+  font: inherit; color: var(--sg-dim); background: transparent; border: 0; cursor: pointer;
+  padding: 4px 6px 4px 0; display: flex; align-items: center; flex: none;
+}
+.sg-assets-strip__remove:hover { color: var(--sg-danger); }
+.sg-assets-strip__remove .sg-icon { font-size: 12px; }
+.sg-assets-strip__add {
+  font: inherit; color: var(--sg-dim); background: transparent; border: 0; cursor: pointer;
+  padding: 4px 6px; display: flex; align-items: center; flex: none; border-radius: var(--sg-radius);
+}
+.sg-assets-strip__add:hover { color: var(--sg-text); background: var(--sg-raised); }
+.sg-assets-strip__add .sg-icon { font-size: 13px; }
+
 .sg-assets-panel__body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 
 .sg-assets-panel__foot {

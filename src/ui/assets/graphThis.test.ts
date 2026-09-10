@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { emptyDocument, type ShaderLayer } from '../../model/document';
+import { emptyDocument, type ShaderLayer, type ShaderNode } from '../../model/document';
 import { emptyManifest, type ProjectManifest } from '../../model/projectManifest';
 import { CHUNK_RAW_NODE_TYPE } from '../../nodes/definitions/chunk';
 import type { RecognizedShaderObject } from '../../storage/recognition';
@@ -198,6 +198,62 @@ describe('graphThis', () => {
     const result = graphThis(object, SOURCE_TEXT, 'My Assets', deps);
 
     expect(result.ok).toBe(true);
+  });
+
+  it('reuses a cached auto-graph node (params/chunkSource) instead of re-deriving one, but assigns a fresh id', () => {
+    const { deps, getDoc } = makeDeps();
+    const object = fixtureObject();
+    const cachedNode: ShaderNode = {
+      id: 'cached-id-should-never-be-reused',
+      type: CHUNK_RAW_NODE_TYPE,
+      title: object.name,
+      position: { x: 0, y: 0 },
+      params: [{ id: 'uSeed', label: 'uSeed', type: 'float', value: 0, ui: 'number' }],
+      previewEnabled: false,
+      chunkSource: { name: object.name, text: SOURCE_TEXT, requires: [] },
+    };
+    const getCachedAutoGraphNode = vi.fn(() => cachedNode);
+
+    const result = graphThis(object, SOURCE_TEXT, 'My Assets', { ...deps, getCachedAutoGraphNode });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok result');
+    expect(getCachedAutoGraphNode).toHaveBeenCalledTimes(1);
+    expect(result.nodeId).not.toBe(cachedNode.id); // never the cached node's own id
+    const inserted = (getDoc().layerStack.layers[0] as ShaderLayer).graph.nodes.find((n) => n.id === result.nodeId);
+    expect(inserted?.chunkSource).toBe(cachedNode.chunkSource); // same reference — verbatim reuse
+    expect(inserted?.params).toBe(cachedNode.params);
+  });
+
+  it('a cache hit still refuses on missing-requires against the REAL document/manifest scope', () => {
+    const { deps } = makeDeps();
+    const object = fixtureObject({ requires: ['GLSL_BASE'] });
+    const cachedNode: ShaderNode = {
+      id: 'cached-id',
+      type: CHUNK_RAW_NODE_TYPE,
+      title: object.name,
+      position: { x: 0, y: 0 },
+      params: [],
+      previewEnabled: false,
+      chunkSource: { name: object.name, text: SOURCE_TEXT, requires: ['GLSL_BASE'] },
+    };
+    const getCachedAutoGraphNode = vi.fn(() => cachedNode);
+
+    const result = graphThis(object, SOURCE_TEXT, 'My Assets', { ...deps, getCachedAutoGraphNode });
+
+    expect(result).toEqual({ ok: false, reason: 'missing-requires', missing: ['GLSL_BASE'] });
+    expect(deps.addPreparedNode).not.toHaveBeenCalled();
+  });
+
+  it('a cache miss (getCachedAutoGraphNode returns undefined) falls back to deriving fresh, exactly as before', () => {
+    const { deps } = makeDeps();
+    const object = fixtureObject();
+    const getCachedAutoGraphNode = vi.fn(() => undefined);
+
+    const result = graphThis(object, SOURCE_TEXT, 'My Assets', { ...deps, getCachedAutoGraphNode });
+
+    expect(result.ok).toBe(true);
+    expect(getCachedAutoGraphNode).toHaveBeenCalledTimes(1);
   });
 
   it('reports "no-active-graph" and never touches the manifest if addPreparedNode refuses', () => {

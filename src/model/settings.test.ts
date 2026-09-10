@@ -73,6 +73,16 @@ describe('save/load round-trip', () => {
     expect(loadSettings(storage)).toEqual(settings);
   });
 
+  it('round-trips previewDockPosition alongside other fields', () => {
+    const storage = memoryStorage();
+    const settings: ProjectSettings = {
+      previewDockPosition: 'top',
+      performanceBudget: { targetMsPerFrame: 16.67 },
+    };
+    saveSettings(settings, storage);
+    expect(loadSettings(storage)).toEqual(settings);
+  });
+
   it('loadSettings returns emptySettings() when nothing is stored', () => {
     const storage = memoryStorage();
     expect(loadSettings(storage)).toEqual(emptySettings());
@@ -137,6 +147,18 @@ describe('parseSettingsText', () => {
       }),
     );
     expect(result.performanceBudget?.population?.variationRanges).toEqual({ good: [0, 1] });
+  });
+
+  it('drops an unrecognised previewDockPosition value', () => {
+    const result = parseSettingsText(JSON.stringify({ previewDockPosition: 'sideways' }));
+    expect(result.previewDockPosition).toBeUndefined();
+  });
+
+  it('accepts previewDockPosition "top" and "bottom"', () => {
+    expect(parseSettingsText(JSON.stringify({ previewDockPosition: 'top' })).previewDockPosition).toBe('top');
+    expect(parseSettingsText(JSON.stringify({ previewDockPosition: 'bottom' })).previewDockPosition).toBe(
+      'bottom',
+    );
   });
 
   it('never throws on unexpected input shapes', () => {

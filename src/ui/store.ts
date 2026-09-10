@@ -41,11 +41,16 @@ import { makeEdgeId, makeGroupId, makeLayerGroupId, makeNodeId, makeSocketId } f
 import {
   findLayer,
   findSiblingArray,
+  findStackNode,
   firstLayerId,
   flattenLayers,
+  insertStackNode,
   isGroupNode,
+  moveStackNode as moveStackNodeInTree,
   replaceSiblingArray,
+  subtreeIds,
   updateStackNode,
+  type StackMoveTarget,
 } from '../model/layerTree';
 import {
   extractSubGraph as extractSubGraphModel,
@@ -278,6 +283,17 @@ export interface EditorStore {
   doc: ShaderDocument;
   /** Editor-only: currently selected node ids. */
   selectedNodeIds: string[];
+  /** Editor-only: currently selected LAYER/GROUP ids in the Layers panel —
+   *  a `StackNode` id, either a leaf `ShaderLayer` or a `LayerGroup` (unlike
+   *  `activeLayerId`, which can only ever name a leaf). Distinct from
+   *  `selectedNodeIds` (canvas node selection inside a graph) so the two
+   *  panels' selections never collide; the Inspector (`Inspector.tsx`) keys
+   *  its "layer controls" section off this, falling back to whichever ids
+   *  still resolve (`findStackNode`) if a selected layer/group was since
+   *  deleted elsewhere. Multiple entries only matter to the Layers panel's
+   *  own multi-select-then-Group action — the Inspector only renders
+   *  controls for a single resolved selection. */
+  selectedLayerIds: string[];
   /** Human-readable reason the last rejected action failed, or `null`. */
   lastError: string | null;
   /** The one shared preview renderer (`createPreviewRenderer`), set by
@@ -347,7 +363,19 @@ export interface EditorStore {
 
   // Layers
   setActiveLayer: (id: string) => void;
-  addLayer: (name?: string) => string | null;
+  /** Adds a new leaf layer. Named `opts.insertBeneath` (a `StackNode` id,
+   *  leaf or group) places it directly BELOW that node in its own sibling
+   *  array (screen order — see `insertStackNode`); omitted or unresolved
+   *  falls back to appending at the document root's end, the original
+   *  simpler default every pre-existing caller still gets unchanged. The
+   *  Layers panel passes its current `selectedLayerIds` primary selection
+   *  here; every other caller (tests, etc.) is unaffected. */
+  addLayer: (name?: string, opts?: { insertBeneath?: string }) => string | null;
+  /** The group counterpart of `addLayer`: an empty new `LayerGroup` (no
+   *  children yet — drag leaves into it, or use `groupLayers` to wrap an
+   *  existing multi-selection instead of starting empty). Same
+   *  `opts.insertBeneath` placement contract as `addLayer`. */
+  addGroup: (name?: string, opts?: { insertBeneath?: string }) => string | null;
   removeLayer: (id: string) => void;
   setLayerProp: (id: string, patch: LayerPatch) => void;
   /** Move one layer a single step in SCREEN direction (see `./layers/reorder`),
@@ -356,16 +384,27 @@ export interface EditorStore {
    *  boundary. No-op at either end of that sibling array. Never touches
    *  `selectedNodeIds`. */
   reorderLayer: (id: string, direction: StackDirection) => void;
+  /** Drag-and-drop's general repositioning primitive: splices `id` to an
+   *  arbitrary destination anywhere in the tree (`StackMoveTarget` —
+   *  before/after a sibling in ARRAY order, or appended into a group),
+   *  unlike `reorderLayer`'s single same-array step. The Layers panel is the
+   *  only caller; see `src/ui/layers/reorder.ts`'s `screenDropTarget` for the
+   *  SCREEN-order → this ARRAY-order translation. No-op (with `lastError`)
+   *  for every rejection `moveStackNode` (the model helper) reports — unknown
+   *  id, dropping a group inside itself/its own descendant, unknown `refId`. */
+  moveStackNode: (id: string, target: StackMoveTarget) => void;
   /** Wrap `ids` (must all be SIBLINGS — resolve to the same parent array,
    *  root or another group's `children`) in one new `LayerGroup`, preserving
    *  their relative stack order and inserting the group at the position of
    *  the earliest-indexed member. Returns the new group's id, or `null` (with
-   *  `lastError`) if `ids` is empty or its members are not all siblings. */
+   *  `lastError`) if `ids` is empty or its members are not all siblings.
+   *  Selects the new group afterward (`selectedLayerIds`). */
   groupLayers: (ids: string[]) => string | null;
   /** Splice `groupId`'s `children` back into its parent at the group's former
    *  position, then delete the now-empty group — the inverse of `groupLayers`
    *  for a contiguous selection. No-op (with `lastError`) if `groupId` does
-   *  not name a group anywhere in the tree. */
+   *  not name a group anywhere in the tree. If the group was selected, its
+   *  former children replace it in `selectedLayerIds`. */
   ungroupLayer: (groupId: string) => void;
 
   // Masks (a layer's optional secondary graph; see `EditingTarget`)
@@ -431,6 +470,11 @@ export interface EditorStore {
 
   // Editor / document
   selectNodes: (ids: string[]) => void;
+  /** Replace the Layers panel's selection (`selectedLayerIds`) — layer AND
+   *  group ids both valid, any mix. Clears `selectedNodeIds`: a canvas-node
+   *  selection and a layer-tree selection are mutually exclusive in the
+   *  Inspector, same convention `selectNodes` uses in the other direction. */
+  selectLayers: (ids: string[]) => void;
   loadDocument: (doc: ShaderDocument) => void;
   newDocument: (name?: string) => void;
   /** Rename the whole document. No-op on an empty/unchanged trimmed name.
@@ -446,6 +490,7 @@ function initialDocument(name?: string): ShaderDocument {
 export const useEditorStore = create<EditorStore>((set, get) => ({
   doc: initialDocument(),
   selectedNodeIds: [],
+  selectedLayerIds: [],
   lastError: null,
   editingTarget: { kind: 'layer' },
   previewRenderer: null,
@@ -723,23 +768,43 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     });
   },
 
-  addLayer(name) {
+  addLayer(name, opts) {
     const doc = get().doc;
     const layer = emptyLayer(name ?? `Layer ${flattenLayers(doc.layerStack.layers).length + 1}`);
+    const layers = insertStackNode(doc.layerStack.layers, layer, opts?.insertBeneath);
     set({
       doc: touch({
         ...doc,
-        layerStack: {
-          ...doc.layerStack,
-          layers: [...doc.layerStack.layers, layer],
-          activeLayerId: layer.id,
-        },
+        layerStack: { ...doc.layerStack, layers, activeLayerId: layer.id },
       }),
       editingTarget: { kind: 'layer' },
       selectedNodeIds: [],
+      selectedLayerIds: [layer.id],
       lastError: null,
     });
     return layer.id;
+  },
+
+  addGroup(name, opts) {
+    const doc = get().doc;
+    const group: LayerGroup = {
+      kind: 'group',
+      id: makeLayerGroupId(),
+      name: name?.trim() || 'Group',
+      blend: 'normal',
+      opacity: 1,
+      enabled: true,
+      visible: true,
+      children: [],
+    };
+    const layers = insertStackNode(doc.layerStack.layers, group, opts?.insertBeneath);
+    set({
+      doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      selectedNodeIds: [],
+      selectedLayerIds: [group.id],
+      lastError: null,
+    });
+    return group.id;
   },
 
   removeLayer(id) {
@@ -761,6 +826,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return;
     }
     const removedLeafIds = new Set(removedLeaves.map((l) => l.id));
+    // Every id that disappears with this removal — the target itself, plus
+    // every nested group inside it, not just its leaves — is what
+    // `selectedLayerIds` must drop (a leaf-only check would leave a removed
+    // GROUP's own id dangling in the selection).
+    const removedIds = subtreeIds(target);
     const currentActiveId = activeLayerId(doc);
     const wasActive = removedLeafIds.has(currentActiveId);
     const { nodes: nextLayers } = updateStackNode(layers, id, () => null);
@@ -788,6 +858,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }),
       editingTarget: staleTarget ? { kind: 'layer' } : editingTarget,
       selectedNodeIds: wasActive ? [] : get().selectedNodeIds,
+      selectedLayerIds: get().selectedLayerIds.filter((sid) => !removedIds.has(sid)),
       lastError: null,
     });
   },
@@ -821,6 +892,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const layers = replaceSiblingArray(doc.layerStack.layers, id, moved);
     set({
       doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      lastError: null,
+    });
+  },
+
+  moveStackNode(id, target) {
+    const doc = get().doc;
+    const result = moveStackNodeInTree(doc.layerStack.layers, id, target);
+    if (result.error) {
+      set({ lastError: result.error });
+      return;
+    }
+    set({
+      doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers: result.nodes } }),
       lastError: null,
     });
   },
@@ -859,6 +943,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const layers = replaceSiblingArray(doc.layerStack.layers, ids[0], nextSiblings);
     set({
       doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      selectedNodeIds: [],
+      selectedLayerIds: [newGroup.id],
       lastError: null,
     });
     return newGroup.id;
@@ -882,8 +968,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       ...info.siblings.slice(info.index + 1),
     ];
     const layers = replaceSiblingArray(doc.layerStack.layers, groupId, nextSiblings);
+    const wasSelected = get().selectedLayerIds.includes(groupId);
     set({
       doc: touch({ ...doc, layerStack: { ...doc.layerStack, layers } }),
+      selectedLayerIds: wasSelected
+        ? [...get().selectedLayerIds.filter((sid) => sid !== groupId), ...node.children.map((c) => c.id)]
+        : get().selectedLayerIds,
       lastError: null,
     });
   },
@@ -1051,7 +1141,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   selectNodes(ids) {
-    set({ selectedNodeIds: [...ids] });
+    set({ selectedNodeIds: [...ids], selectedLayerIds: [] });
+  },
+
+  selectLayers(ids) {
+    // Drop ids that resolve to neither a layer nor a group — same "never
+    // point at nothing" discipline `editingTarget` uses, so the Inspector
+    // never has to guess whether a ghost id means "empty selection".
+    const layers = get().doc.layerStack.layers;
+    const resolved = ids.filter((id) => !!findStackNode(layers, id));
+    set({ selectedLayerIds: resolved, selectedNodeIds: [] });
   },
 
   loadDocument(doc) {

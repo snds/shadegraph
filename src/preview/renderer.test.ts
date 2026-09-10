@@ -230,6 +230,13 @@ describe('PreviewRenderer — recompile vs. direct uniform write', () => {
     expect(() => renderer.setVisibleNodes([])).toThrow();
     await expect(renderer.requestThumbnail({ nodeId: 'x' })).rejects.toThrow();
     expect(() => renderer.setThumbnailBudget(16)).toThrow();
+    expect(() => renderer.setVisibleLayers([])).toThrow();
+    await expect(renderer.requestLayerThumbnail({ id: 'x' })).rejects.toThrow();
+    expect(() => renderer.setVisibleAssetThumbnails([])).toThrow();
+    await expect(
+      renderer.requestAssetThumbnail({ key: 'x', doc: emptyDocument(), signature: 's' }),
+    ).rejects.toThrow();
+    expect(() => renderer.releaseAssetThumbnail('x')).toThrow();
   });
 });
 
@@ -245,6 +252,9 @@ describe('PreviewRenderer — delegates to an injected ThumbnailHost', () => {
       markDirtyCalls: [] as string[],
       markAllDirtyCalls: 0,
       visibleCalls: [] as string[][],
+      stackVisibleCalls: [] as string[][],
+      assetVisibleCalls: [] as string[][],
+      releaseAssetCalls: [] as string[],
       budgetCalls: [] as number[],
       disposeCalls: 0,
       onDocument(_doc: unknown, target: string, changed: Set<string>) {
@@ -259,8 +269,23 @@ describe('PreviewRenderer — delegates to an injected ThumbnailHost', () => {
       setVisibleNodes(ids: string[]) {
         this.visibleCalls.push(ids);
       },
+      setVisibleStackNodes(ids: string[]) {
+        this.stackVisibleCalls.push(ids);
+      },
       request(req: { nodeId: string }) {
         return Promise.resolve({ __fakeCanvasFor: req.nodeId } as unknown as HTMLCanvasElement);
+      },
+      requestStack(req: { id: string }) {
+        return Promise.resolve({ __fakeStackCanvasFor: req.id } as unknown as HTMLCanvasElement);
+      },
+      setVisibleAssetThumbnails(keys: string[]) {
+        this.assetVisibleCalls.push(keys);
+      },
+      requestAsset(req: { key: string }) {
+        return Promise.resolve({ __fakeAssetCanvasFor: req.key } as unknown as HTMLCanvasElement);
+      },
+      releaseAsset(key: string) {
+        this.releaseAssetCalls.push(key);
       },
       setBudget(ms: number) {
         this.budgetCalls.push(ms);
@@ -304,6 +329,33 @@ describe('PreviewRenderer — delegates to an injected ThumbnailHost', () => {
 
     renderer.setThumbnailBudget(4);
     expect(thumbnails.budgetCalls).toEqual([4]);
+  });
+
+  it('setVisibleLayers / requestLayerThumbnail delegate directly (the Layers-panel counterpart)', async () => {
+    const gpu = fakeGpu();
+    const thumbnails = fakeThumbnails();
+    const renderer = new PreviewRenderer(gpu, { compile: fakeCompile([]) }, thumbnails);
+
+    renderer.setVisibleLayers(['layerA', 'grp1']);
+    expect(thumbnails.stackVisibleCalls).toEqual([['layerA', 'grp1']]);
+
+    const canvas = await renderer.requestLayerThumbnail({ id: 'grp1' });
+    expect(canvas).toEqual({ __fakeStackCanvasFor: 'grp1' });
+  });
+
+  it('setVisibleAssetThumbnails / requestAssetThumbnail / releaseAssetThumbnail delegate directly (the Assets-panel counterpart)', async () => {
+    const gpu = fakeGpu();
+    const thumbnails = fakeThumbnails();
+    const renderer = new PreviewRenderer(gpu, { compile: fakeCompile([]) }, thumbnails);
+
+    renderer.setVisibleAssetThumbnails(['root1::a', 'root1::b']);
+    expect(thumbnails.assetVisibleCalls).toEqual([['root1::a', 'root1::b']]);
+
+    const canvas = await renderer.requestAssetThumbnail({ key: 'root1::a', doc: emptyDocument(), signature: 's1' });
+    expect(canvas).toEqual({ __fakeAssetCanvasFor: 'root1::a' });
+
+    renderer.releaseAssetThumbnail('root1::a');
+    expect(thumbnails.releaseAssetCalls).toEqual(['root1::a']);
   });
 
   it('markDirty / markAllDirty / dispose delegate to the ThumbnailHost', () => {

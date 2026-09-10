@@ -41,6 +41,8 @@ export const chunkRaw: NodeDefinition = {
     'Created via the asset browser\'s "graph this" action on a recognized ' +
     'object, not usefully created by hand from this palette entry (a freshly ' +
     'added one has no `chunkSource` yet).',
+  guidance:
+    'Not meant to be added from here — use the asset browser\'s "Graph this" action on a recognized shader object instead, which fills in the source this node needs to compile.',
   inputs: [],
   outputs: [],
   params: [],

@@ -32,6 +32,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import {
@@ -59,7 +60,7 @@ import { AddNodePalette } from './AddNodePalette';
 import { boundsForNodes, groupContaining, FALLBACK_NODE_SIZE, type NodeRect } from './groupBounds';
 import { GraphBreadcrumb } from './GraphBreadcrumb';
 import { GroupFrameNode } from './GroupFrameNode';
-import { cascadeOffset } from './paletteCascade';
+import { NODE_GALLERY_DND_MIME } from '../nodes/nodeGalleryDnd';
 import { ShaderNodeCard } from './ShaderNodeCard';
 import { SocketLegend } from './SocketLegend';
 import { registrySocketLookup } from './socketLookup';
@@ -168,10 +169,6 @@ function GraphCanvasInner() {
   const [palette, setPalette] = useState<PalettePosition | null>(null);
   const { screenToFlowPosition, getInternalNode } = useReactFlow();
   const wrapper = useRef<HTMLElement>(null);
-  // Counts toolbar opens so far, so successive "+ Add node" clicks fan out
-  // from the pane center instead of landing on the exact same spot. Pointer-
-  // anchored opens (double-click / right-click) never touch this.
-  const toolbarOpenCount = useRef(0);
 
   // React Flow calls isValidConnection on every pointer move during a drag, and
   // onConnectEnd fires outside React's render pass; refs keep both reading the
@@ -384,14 +381,31 @@ function GraphCanvasInner() {
     [addNode, palette, screenToFlowPosition, selectNodes],
   );
 
-  const openPaletteFromToolbar = useCallback(() => {
-    const box = wrapper.current?.getBoundingClientRect();
-    const centerX = (box?.left ?? 0) + (box?.width ?? 0) / 2;
-    const centerY = (box?.top ?? 0) + (box?.height ?? 0) / 2;
-    const offset = cascadeOffset(toolbarOpenCount.current);
-    toolbarOpenCount.current += 1;
-    openPaletteAt(centerX + offset.dx, centerY + offset.dy);
-  }, [openPaletteAt]);
+  // ── Nodes gallery drag-and-drop ─────────────────────────────────────────
+  // Drop counterpart to the Nodes pivot panel's drag source
+  // (`NodeGallery.tsx`): the gallery has no canvas/viewport of its own, so it
+  // hands off the actual placement to whichever coordinates the browser drop
+  // event lands at here. Click-to-add from the gallery instead uses its own
+  // cascading placement (`galleryPlacement.ts`) — this handler only ever
+  // fires for a real drag.
+
+  const onDragOver = useCallback((event: ReactDragEvent) => {
+    if (!event.dataTransfer.types.includes(NODE_GALLERY_DND_MIME)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const onDrop = useCallback(
+    (event: ReactDragEvent) => {
+      const type = event.dataTransfer.getData(NODE_GALLERY_DND_MIME);
+      if (!type) return;
+      event.preventDefault();
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const id = addNode(type, position);
+      if (id) selectNodes([id]);
+    },
+    [addNode, screenToFlowPosition, selectNodes],
+  );
 
   // ── Groups / frames ─────────────────────────────────────────────────────
 
@@ -471,7 +485,14 @@ function GraphCanvasInner() {
   }, [groupSelectedNodes]);
 
   return (
-    <section className="sg-graph" aria-label="Node graph" ref={wrapper} onDoubleClick={onDoubleClick}>
+    <section
+      className="sg-graph"
+      aria-label="Node graph"
+      ref={wrapper}
+      onDoubleClick={onDoubleClick}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -504,9 +525,6 @@ function GraphCanvasInner() {
         <Controls showInteractive={false} fitViewOptions={FIT_VIEW} />
         <MiniMap pannable zoomable nodeColor="#2a313c" maskColor="rgba(14,16,19,0.7)" />
         <Panel position="top-left" className="sg-graph__toolbar">
-          <button type="button" className="sg-btn" onClick={openPaletteFromToolbar}>
-            + Add node
-          </button>
           <button
             type="button"
             className="sg-btn"
@@ -552,7 +570,7 @@ function GraphCanvasInner() {
           nothing but that placeholder output has been added yet. */}
       {graph.nodes.length <= 1 ? (
         <div className="sg-graph__hint" aria-hidden="true">
-          double-click or right-click the canvas to add a node
+          double-click or right-click the canvas, or drag a node in from the Nodes panel
         </div>
       ) : null}
 

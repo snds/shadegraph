@@ -12,6 +12,8 @@ export const inputUv: NodeDefinition = {
   category: 'input',
   title: 'UV',
   description: 'Surface texture coordinates, with optional tiling and offset.',
+  guidance:
+    'Start here for anything pattern-based. Feed the UV output into noise, ramps, or math nodes; raise Tiling to repeat a pattern, or animate Offset for scrolling effects.',
   inputs: [],
   outputs: [out('uv', 'UV', 'vec2')],
   params: [
@@ -42,6 +44,8 @@ export const inputTime: NodeDefinition = {
   category: 'input',
   title: 'Time',
   description: 'Seconds since start, scaled by speed. Drives animated shaders.',
+  guidance:
+    'Wire into a UV offset, noise seed, or math node to animate it. Speed scales the clock — 0 freezes it, negative runs it backwards.',
   inputs: [],
   outputs: [out('time', 'Time', 'float')],
   params: [param('speed', 'Speed', 'float', 1, 'slider', { min: 0, max: 10, step: 0.01 })],

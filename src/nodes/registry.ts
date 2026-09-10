@@ -32,6 +32,11 @@ export interface NodeDefinition {
   category: NodeCategory;
   title: string;
   description?: string;
+  /** Short, node-specific hover blurb for the gallery (`src/ui/nodes/`) — how
+   *  and why you'd use THIS node, not a restatement of `description`. Falls
+   *  back to `description` where unset, so every node always has something
+   *  to show on hover even before this is written for it. */
+  guidance?: string;
   inputs: Omit<Socket, 'direction'>[];
   outputs: Omit<Socket, 'direction'>[];
   /** Default params instantiated on the node when created. */

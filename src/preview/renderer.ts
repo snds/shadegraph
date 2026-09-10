@@ -40,7 +40,13 @@ import {
 import '../compiler/backends/glsl-es';
 // Side effect: registers `wgslBackend`, same pattern as glsl-es above.
 import '../compiler/backends/wgsl';
-import type { PreviewScheduler, ThumbnailRequest, ViewerSource } from './scheduler';
+import type {
+  AssetThumbnailRequest,
+  PreviewScheduler,
+  StackThumbnailRequest,
+  ThumbnailRequest,
+  ViewerSource,
+} from './scheduler';
 import { viewerSourceToCompileOptions } from './scheduler';
 import { collectUniformValues, sameUniformValue, topologySignature } from './topology';
 import { createThumbnailScheduler, diffChangedNodeIds, type ThumbnailHost } from './thumbnails';
@@ -188,6 +194,33 @@ export class PreviewRenderer implements PreviewScheduler {
   requestThumbnail(req: ThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement> {
     if (!this.thumbnails) return Promise.reject(notImplemented('requestThumbnail'));
     return this.thumbnails.request(req);
+  }
+
+  setVisibleLayers(ids: string[]): void {
+    if (!this.thumbnails) throw notImplemented('setVisibleLayers');
+    this.thumbnails.setVisibleStackNodes(ids);
+  }
+
+  requestLayerThumbnail(req: StackThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement> {
+    if (!this.thumbnails) return Promise.reject(notImplemented('requestLayerThumbnail'));
+    return this.thumbnails.requestStack(req);
+  }
+
+  // ── PreviewScheduler: per-asset (Assets panel) thumbnails ────────────────
+
+  setVisibleAssetThumbnails(keys: string[]): void {
+    if (!this.thumbnails) throw notImplemented('setVisibleAssetThumbnails');
+    this.thumbnails.setVisibleAssetThumbnails(keys);
+  }
+
+  requestAssetThumbnail(req: AssetThumbnailRequest): Promise<ImageBitmap | HTMLCanvasElement> {
+    if (!this.thumbnails) return Promise.reject(notImplemented('requestAssetThumbnail'));
+    return this.thumbnails.requestAsset(req);
+  }
+
+  releaseAssetThumbnail(key: string): void {
+    if (!this.thumbnails) throw notImplemented('releaseAssetThumbnail');
+    this.thumbnails.releaseAsset(key);
   }
 
   setThumbnailBudget(msPerFrame: number): void {

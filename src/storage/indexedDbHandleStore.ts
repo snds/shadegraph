@@ -4,16 +4,16 @@
 // `FileSystemDirectoryHandle` is structured-cloneable but not JSON-
 // serializable, so it can't live in `localStorage` next to the autosave
 // (Phase 4 sketch's `ProjectSettings` note) — IndexedDB is the one browser
-// store that can hold it directly. One object store, one fixed key: there is
-// only ever one connected root at a time.
+// store that can hold it directly. One object store, one row per connected
+// root, keyed by that root's `assetStore.ts`-assigned `id` — multiple
+// simultaneously-connected folders, not just one.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { HandleStore } from './types';
+import type { HandleStore, StoredAssetRoot } from './types';
 
 const DB_NAME = 'shadegraph-storage';
 const DB_VERSION = 1;
 const STORE_NAME = 'handles';
-const DIRECTORY_KEY = 'assetDirectory';
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -51,17 +51,43 @@ async function withStore<T>(
  *  verification pass (reconnect without re-prompting the picker). */
 export function createIndexedDbHandleStore(): HandleStore {
   return {
-    async save(handle) {
-      await withStore('readwrite', (store) => store.put(handle, DIRECTORY_KEY));
+    async save(id, handle) {
+      await withStore('readwrite', (store) => store.put(handle, id));
     },
-    async load() {
-      const handle = await withStore<FileSystemDirectoryHandle | undefined>('readonly', (store) =>
-        store.get(DIRECTORY_KEY),
-      );
-      return handle ?? undefined;
+    async loadAll() {
+      const db = await openDb();
+      try {
+        return await new Promise<StoredAssetRoot[]>((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const store = tx.objectStore(STORE_NAME);
+          const keysRequest = store.getAllKeys();
+          const valuesRequest = store.getAll();
+          let keys: IDBValidKey[] | undefined;
+          let values: FileSystemDirectoryHandle[] | undefined;
+          const settle = () => {
+            if (keys === undefined || values === undefined) return;
+            resolve(keys.map((key, i) => ({ id: String(key), handle: values![i] })));
+          };
+          keysRequest.onsuccess = () => {
+            keys = keysRequest.result;
+            settle();
+          };
+          valuesRequest.onsuccess = () => {
+            values = valuesRequest.result;
+            settle();
+          };
+          keysRequest.onerror = () => reject(keysRequest.error ?? new Error('Failed to read handle keys'));
+          valuesRequest.onerror = () => reject(valuesRequest.error ?? new Error('Failed to read handle values'));
+        });
+      } finally {
+        db.close();
+      }
+    },
+    async remove(id) {
+      await withStore('readwrite', (store) => store.delete(id));
     },
     async clear() {
-      await withStore('readwrite', (store) => store.delete(DIRECTORY_KEY));
+      await withStore('readwrite', (store) => store.clear());
     },
   };
 }

@@ -12,6 +12,8 @@ export const noiseFbm: NodeDefinition = {
   category: 'noise',
   title: 'FBM Noise',
   description: 'Fractal Brownian motion: summed octaves of value noise over a UV.',
+  guidance:
+    'The workhorse organic-texture node. Feed it a UV, then push the output into a Color Ramp for surface detail, or into Mix/Multiply as a mask. More Octaves adds fine detail at the cost of a longer compile-time loop.',
   inputs: [inp('uv', 'UV', 'vec2', [0, 0])],
   outputs: [out('value', 'Value', 'float')],
   params: [

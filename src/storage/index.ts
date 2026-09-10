@@ -7,7 +7,13 @@
 // `FileSystemHandle`-touching module.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export { flattenVisibleTree, useAssetStore, type AssetConnectionStatus, type AssetStoreState } from './assetStore';
+export {
+  flattenVisibleTree,
+  useAssetStore,
+  type AssetConnectionStatus,
+  type AssetRoot,
+  type AssetStoreState,
+} from './assetStore';
 export {
   defaultRecognitionConfigId,
   getRecognitionConfigOption,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import type { LayerGroup } from '../model/document';
 import { findLayer } from '../model/layerTree';
 import { deserialize, serialize } from '../model/serialize';
 import { nodes, type NodeDefinition } from '../nodes/registry';
@@ -444,6 +445,216 @@ describe('layer groups', () => {
 
     const group = store().doc.layerStack.layers.find((l) => l.id === groupId);
     expect(group).toMatchObject({ name: 'Combined', opacity: 0.4, blend: 'screen' });
+  });
+});
+
+describe('layer selection (Layers panel ↔ Inspector handoff)', () => {
+  it('selectLayers replaces selectedLayerIds and clears selectedNodeIds', () => {
+    const layerId = activeLayer(store().doc).id;
+    store().selectNodes([add('test.uv')]);
+
+    store().selectLayers([layerId]);
+
+    expect(store().selectedLayerIds).toEqual([layerId]);
+    expect(store().selectedNodeIds).toEqual([]);
+  });
+
+  it('selectNodes clears selectedLayerIds (the two selections are mutually exclusive)', () => {
+    const layerId = activeLayer(store().doc).id;
+    store().selectLayers([layerId]);
+
+    store().selectNodes([add('test.uv')]);
+
+    expect(store().selectedLayerIds).toEqual([]);
+  });
+
+  it('accepts a group id, not just a leaf layer id', () => {
+    const base = activeLayer(store().doc).id;
+    const groupId = store().groupLayers([base]) as string;
+
+    store().selectLayers([groupId]);
+
+    expect(store().selectedLayerIds).toEqual([groupId]);
+  });
+
+  it('drops ids that resolve to neither a layer nor a group', () => {
+    const layerId = activeLayer(store().doc).id;
+
+    store().selectLayers([layerId, 'no-such-id']);
+
+    expect(store().selectedLayerIds).toEqual([layerId]);
+  });
+});
+
+describe('addLayer / addGroup — insertBeneath placement (Layers panel tree task)', () => {
+  it('with no insertBeneath, still appends at the root end (original default, unchanged)', () => {
+    const base = activeLayer(store().doc).id;
+    const top = store().addLayer('Top') as string;
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, top]);
+  });
+
+  it('inserts directly BELOW insertBeneath in its own sibling array', () => {
+    const base = activeLayer(store().doc).id;
+    const top = store().addLayer('Top') as string;
+
+    const middle = store().addLayer('Middle', { insertBeneath: top }) as string;
+
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, middle, top]);
+  });
+
+  it('inserts beneath a node nested inside a group', () => {
+    const base = activeLayer(store().doc).id;
+    const inner = store().addLayer('Inner') as string;
+    const groupId = store().groupLayers([inner]) as string;
+
+    const newLeaf = store().addLayer('New', { insertBeneath: inner }) as string;
+
+    const layers = store().doc.layerStack.layers;
+    expect(layers.map((l) => l.id)).toEqual([base, groupId]);
+    const group = layers[1] as LayerGroup;
+    expect(group.children.map((c) => c.id)).toEqual([newLeaf, inner]);
+  });
+
+  it('falls back to appending at the root end when insertBeneath does not resolve', () => {
+    const base = activeLayer(store().doc).id;
+    const top = store().addLayer('Top', { insertBeneath: 'no-such-id' }) as string;
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, top]);
+  });
+
+  it('selects the newly added layer', () => {
+    const layerId = store().addLayer('New') as string;
+    expect(store().selectedLayerIds).toEqual([layerId]);
+    expect(store().selectedNodeIds).toEqual([]);
+  });
+
+  it('addGroup creates an empty group and selects it', () => {
+    const base = activeLayer(store().doc).id;
+    const groupId = store().addGroup('Empty') as string;
+
+    const layers = store().doc.layerStack.layers;
+    expect(layers.map((l) => l.id)).toEqual([base, groupId]);
+    const group = layers[1] as LayerGroup;
+    expect(group.kind).toBe('group');
+    expect(group.children).toEqual([]);
+    expect(store().selectedLayerIds).toEqual([groupId]);
+  });
+
+  it('addGroup honors insertBeneath exactly like addLayer', () => {
+    const base = activeLayer(store().doc).id;
+    const groupId = store().addGroup('New group', { insertBeneath: base }) as string;
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([groupId, base]);
+  });
+});
+
+describe('moveStackNode — drag-and-drop repositioning', () => {
+  it('reorders within the same sibling array (array order, not screen order)', () => {
+    const base = activeLayer(store().doc).id;
+    const middle = store().addLayer('Middle') as string;
+    const top = store().addLayer('Top') as string;
+
+    store().moveStackNode(middle, { parentId: null, kind: 'after', refId: top });
+
+    expect(store().doc.layerStack.layers.map((l) => l.id)).toEqual([base, top, middle]);
+  });
+
+  it('moves a leaf into an existing group by appending', () => {
+    const base = activeLayer(store().doc).id;
+    const inner = store().addLayer('Inner') as string;
+    const groupId = store().groupLayers([inner]) as string;
+
+    store().moveStackNode(base, { parentId: groupId, kind: 'append' });
+
+    const layers = store().doc.layerStack.layers;
+    expect(layers.map((l) => l.id)).toEqual([groupId]);
+    const group = layers[0] as LayerGroup;
+    expect(group.children.map((c) => c.id)).toEqual([inner, base]);
+  });
+
+  it('moves a leaf out of a group back to the root', () => {
+    const base = activeLayer(store().doc).id;
+    const inner = store().addLayer('Inner') as string;
+    const groupId = store().groupLayers([inner]) as string;
+
+    store().moveStackNode(inner, { parentId: null, kind: 'after', refId: base });
+
+    const layers = store().doc.layerStack.layers;
+    expect(layers.map((l) => l.id)).toEqual([base, inner, groupId]);
+    const group = layers[2] as LayerGroup;
+    expect(group.children).toEqual([]);
+  });
+
+  it('rejects dropping a group inside itself or its own descendant, surfacing lastError', () => {
+    const base = activeLayer(store().doc).id;
+    const groupId = store().groupLayers([base]) as string;
+
+    store().moveStackNode(groupId, { parentId: groupId, kind: 'append' });
+    expect(store().lastError).toMatch(/inside itself/);
+  });
+
+  it('is a no-op with lastError for an unknown id', () => {
+    const before = store().doc;
+    store().moveStackNode('no-such-id', { parentId: null, kind: 'after', refId: 'also-missing' });
+    expect(store().lastError).toMatch(/No layer/);
+    expect(store().doc).toBe(before);
+  });
+});
+
+describe('groupLayers / ungroupLayer — selection handoff', () => {
+  it('groupLayers selects the new group and clears any node selection', () => {
+    const base = activeLayer(store().doc).id;
+    store().selectNodes([add('test.uv')]);
+
+    const groupId = store().groupLayers([base]) as string;
+
+    expect(store().selectedLayerIds).toEqual([groupId]);
+    expect(store().selectedNodeIds).toEqual([]);
+  });
+
+  it('ungroupLayer replaces the group with its former children in selectedLayerIds, if it was selected', () => {
+    const base = activeLayer(store().doc).id;
+    const second = store().addLayer('Second') as string;
+    const groupId = store().groupLayers([base, second]) as string;
+    store().selectLayers([groupId]);
+
+    store().ungroupLayer(groupId);
+
+    expect(store().selectedLayerIds).toEqual([base, second]);
+  });
+
+  it('ungroupLayer leaves an unrelated selection untouched', () => {
+    const base = activeLayer(store().doc).id;
+    const second = store().addLayer('Second') as string;
+    const third = store().addLayer('Third') as string;
+    const groupId = store().groupLayers([base, second]) as string;
+    store().selectLayers([third]);
+
+    store().ungroupLayer(groupId);
+
+    expect(store().selectedLayerIds).toEqual([third]);
+  });
+});
+
+describe('removeLayer — selection cleanup', () => {
+  it('drops the removed leaf from selectedLayerIds', () => {
+    const base = activeLayer(store().doc).id;
+    const second = store().addLayer('Second') as string;
+    store().selectLayers([second]);
+
+    store().removeLayer(second);
+
+    expect(store().selectedLayerIds).toEqual([]);
+    expect(activeLayer(store().doc).id).toBe(base);
+  });
+
+  it('drops a removed group AND every nested group/leaf id from selectedLayerIds, not just leaves', () => {
+    const base = activeLayer(store().doc).id;
+    const inner = store().addLayer('Inner') as string;
+    const groupId = store().groupLayers([inner]) as string;
+    store().selectLayers([groupId, base]);
+
+    store().removeLayer(groupId);
+
+    expect(store().selectedLayerIds).toEqual([base]);
   });
 });
 

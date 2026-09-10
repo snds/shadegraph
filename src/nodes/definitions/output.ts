@@ -11,6 +11,8 @@ export const outputSurface: NodeDefinition = {
   category: 'output',
   title: 'Surface Output',
   description: 'Terminal node: the shaded surface this layer contributes.',
+  guidance:
+    "Every layer's main graph ends here — undeletable, and already present in a fresh layer. Wire your final color/roughness/normal chain into its inputs; nothing downstream of this node matters.",
   inputs: [
     inp('baseColor', 'Base Color', 'color', [0.5, 0.5, 0.5]),
     inp('roughness', 'Roughness', 'float', 0.5),

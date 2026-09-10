@@ -11,8 +11,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 
 import { nodes, type NodeCategory, type NodeDefinition } from '../../nodes/registry';
 
-/** Palette grouping order. Anything not listed is appended alphabetically. */
-const CATEGORY_ORDER: NodeCategory[] = [
+/** Palette grouping order. Anything not listed is appended alphabetically.
+ *  Exported for reuse by the Nodes gallery (`src/ui/nodes/NodeGallery.tsx`),
+ *  so the two node-adding surfaces group categories identically. */
+export const CATEGORY_ORDER: NodeCategory[] = [
   'input',
   'math',
   'noise',

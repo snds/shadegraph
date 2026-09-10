@@ -18,7 +18,7 @@
 // tests pass minimal stubs.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { ShaderDocument } from '../../model/document';
+import type { StackMoveTarget } from '../../model/layerTree';
 
 /** A direction as the USER sees it in the panel, not as the array stores it. */
 export type StackDirection = 'up' | 'down';
@@ -81,29 +81,32 @@ export function moveLayer<T extends Identified>(
   return next;
 }
 
-/**
- * The whole document with one layer moved a step, or `null` if it cannot move.
- *
- * ── TEMPORARY, and deliberately in the UI layer ────────────────────────────
- * `useEditorStore` has no `reorderLayer` action yet, and this task may not edit
- * `store.ts`. The panel therefore builds the next document here and hands it to
- * the existing `loadDocument` action — a real action, so nothing mutates the
- * live document in place. Reported as a follow-up: once `reorderLayer(id, dir)`
- * exists on the store, delete this function and call it directly.
- *
- * `meta.updated` is stamped here because `loadDocument` (correctly, for its own
- * job of opening a file) does not stamp it, and a reorder IS an edit.
- */
-export function reorderedDocument(
-  doc: ShaderDocument,
-  id: string,
-  direction: StackDirection,
-): ShaderDocument | null {
-  const layers = moveLayer(doc.layerStack.layers, id, direction);
-  if (!layers) return null;
-  return {
-    ...doc,
-    layerStack: { ...doc.layerStack, layers },
-    meta: { ...doc.meta, updated: new Date().toISOString() },
-  };
+// ── Drag-and-drop: screen zone → store target ──────────────────────────────
+// The tree's drag-and-drop (`LayerStack.tsx`) hit-tests in SCREEN terms — the
+// pointer is above/below/on a hovered row, exactly what the user sees — but
+// `useEditorStore.moveStackNode` (backed by `src/model/layerTree.ts`'s
+// `moveStackNode`) takes ARRAY-order targets. This is the one place that
+// screen→array inversion for DRAG happens, mirroring `topFirst`'s role for
+// the up/down move buttons above.
+
+/** Where, relative to a hovered row, a drop lands — as the user SEES it:
+ *  above it (`'before'`), below it (`'after'`), or, only meaningful when the
+ *  hovered row is a group, dropped ON it (`'into'`, appended as its last
+ *  child). */
+export type ScreenDropZone = 'before' | 'after' | 'into';
+
+/** Converts one drag gesture (`zone`, expressed in screen terms relative to
+ *  `hoveredId`) into the ARRAY-order `StackMoveTarget` the store expects.
+ *  Screen-`'before'` (visually above, closer to the top of the stack) is
+ *  LATER in the bottom-to-top array — hence the flip — screen-`'after'` is
+ *  earlier; see this file's header comment on why `topFirst` reverses at
+ *  all. `'into'` needs no such flip: appending as a group's last child has
+ *  no separate screen/array sense to invert. */
+export function screenDropTarget(
+  zone: ScreenDropZone,
+  hoveredId: string,
+  hoveredParentId: string | null,
+): StackMoveTarget {
+  if (zone === 'into') return { parentId: hoveredId, kind: 'append' };
+  return { parentId: hoveredParentId, kind: zone === 'before' ? 'after' : 'before', refId: hoveredId };
 }

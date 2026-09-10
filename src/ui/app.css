@@ -41,13 +41,36 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 /* Flex row, not a fixed grid: the pivot rail and panel host (`src/ui/shell/`)
    each size themselves via their own CSS (rail collapses to icon-only,
    panel host is a fixed track) rather than this container dictating column
-   widths — that's what let the rail collapse without this file changing. */
-.sg-body { flex: 1; display: flex; min-height: 0; }
-.sg-layers, .sg-inspector { background: var(--sg-panel); padding: 10px; overflow: auto; min-width: 0; }
+   widths — that's what let the rail collapse without this file changing.
+   `position: relative` is what lets `.sg-inspector` float within this box
+   (see below) instead of claiming a flex track of its own. */
+.sg-body { flex: 1; display: flex; min-height: 0; position: relative; }
+.sg-layers { background: var(--sg-panel); padding: 10px; overflow: auto; min-width: 0; }
 /* `.sg-layers` fills whatever hosts it now (the shell's panel host) instead
    of being a direct, self-bordered grid column. */
 .sg-layers { width: 100%; height: 100%; }
-.sg-inspector { flex: 0 0 300px; border-left: 1px solid var(--sg-line); }
+
+/* Floating panel, not a flex track: pulling it out of flow (`position:
+   absolute`) is what lets `.sg-graph`/`.sg-main-region` (the "main content
+   region" this floats over — see `GraphCanvas.tsx`/`MainContentRegion.tsx`)
+   expand to fill the space this column used to reserve, with the panel
+   floating on top of its right edge instead.
+   Deliberately no `bottom` alongside `top`: an absolutely positioned box with
+   BOTH `top` and `bottom` set (and `height: auto`) is stretched to fill the
+   gap between them per the CSS spec — the opposite of "hugs its content".
+   `top`/`right` alone plus `max-height` as a cap is what lets height stay
+   content-driven (a couple of toggles vs. a long param list) and only fall
+   back to an internal scrollbar once a selection's content actually exceeds
+   it, rather than always claiming a fixed-height column like the old static
+   layout did. */
+.sg-inspector {
+  position: absolute; top: 12px; right: 12px;
+  width: 300px; max-height: calc(100% - 24px);
+  background: var(--sg-panel); border: 1px solid var(--sg-line); border-radius: var(--sg-radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  padding: 10px; overflow: auto; min-width: 0;
+  z-index: 10;
+}
 
 .sg-pane__title {
   margin: 0 0 8px; font-size: 11px; font-weight: 600;
@@ -76,11 +99,11 @@ body { background: var(--sg-bg); color: var(--sg-text); font: 13px/1.4 system-ui
 .sg-graph__toolbar { display: flex; align-items: center; gap: 10px; }
 .sg-graph__meta { color: var(--sg-dim); font-size: 11px; }
 /* Empty-state message, only rendered while the active layer's graph has no
-   nodes beyond its mandatory output node. Sits just under the toolbar, near
-   "+ Add node", rather than dead-center — a fresh document's single output
-   node is itself centered by `fitView`, so a true center placement would sit
-   right on top of it. `pointer-events: none` keeps it from intercepting the
-   double-click / right-click it describes. */
+   nodes beyond its mandatory output node. Sits just under the toolbar rather
+   than dead-center — a fresh document's single output node is itself
+   centered by `fitView`, so a true center placement would sit right on top
+   of it. `pointer-events: none` keeps it from intercepting the double-click /
+   right-click / drag it describes. */
 .sg-graph__hint {
   position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
   color: var(--sg-text); font-size: 14px; opacity: 0.85; pointer-events: none;

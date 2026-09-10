@@ -279,6 +279,44 @@ describe('glslEsBackend.compileDocument', () => {
     expect(program.fragment).toContain('gl_FragColor');
   });
 
+  // A Layers-panel row's thumbnail for a GROUP compiles through this exact
+  // path (`ThumbnailScheduler.renderOneStack`): `previewLayerId` naming a
+  // `LayerGroup` folds its own children in isolation — one blend call site
+  // for the two children composited together, but bypassing whatever the
+  // group would itself blend into further up the tree.
+  it('previewLayerId isolates a GROUP by folding its own children, bypassing the parent stack', () => {
+    const doc = twoLayerDoc();
+    const group: LayerGroup = {
+      kind: 'group',
+      id: 'grp1',
+      name: 'Group',
+      blend: 'normal',
+      opacity: 1,
+      enabled: true,
+      visible: true,
+      children: doc.layerStack.layers,
+    };
+    const third = emptyLayer('Third');
+    const wrapped = emptyDocument('Wrapped');
+    wrapped.layerStack.layers = [group, third];
+
+    const program = glslEsBackend.compileDocument(wrapped, { previewLayerId: 'grp1' });
+    expect(program.diagnostics).toEqual([]);
+    // Exactly two blend call sites: the group's own two children, each
+    // blended in turn against the fold's initial black canvas — never a
+    // THIRD call for the group's own blend into the parent stack, and never
+    // `third` (outside the group) contributing a call of its own.
+    const blendCalls = (program.fragment ?? '').match(/= sg_blend\w+\(/g) ?? [];
+    expect(blendCalls).toHaveLength(2);
+    expect(program.fragment).toContain('gl_FragColor');
+  });
+
+  it('previewLayerId reports a diagnostic instead of throwing when the id resolves to nothing', () => {
+    const doc = twoLayerDoc();
+    const program = glslEsBackend.compileDocument(doc, { previewLayerId: 'does-not-exist' });
+    expect(program.diagnostics.some((d) => d.level === 'error')).toBe(true);
+  });
+
   // Regression guard for the pre-existing gap flagged by the thumbnails task:
   // `compileDocument` only honored `previewLayerId`, never `previewNodeId`, so
   // `PreviewRenderer`'s `ViewerSource: {kind:'node'}` (solo a node to the MAIN

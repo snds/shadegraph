@@ -12,9 +12,16 @@
 // media the same way `AssetBrowserPanel.tsx` does — both per the task's
 // explicit "may read from src/storage/ and src/model/settings.ts" scope.
 // Neither `src/ui/settings/` nor `src/ui/assets/` is edited by this task.
+//
+// `useAssetStore` supports multiple simultaneously-connected folders
+// (`AssetRoot[]`) — this picker browses EVERY connected one, one section per
+// root, since a reference still can live in any of them. Deliberately NOT
+// filtered to `root.visibleIds` (the Assets panel's shader-recognition
+// filter): a reference image/video is never itself a recognized shader
+// object, so that filter would hide every pickable file here.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { flattenVisibleTree, useAssetStore, type AssetTreeNode } from '../../storage';
 import { CritiqueError } from '../../critique/errors';
@@ -37,51 +44,77 @@ type RunState =
 /** The reference-media tree picker. Deliberately simpler than
  *  `AssetBrowserPanel`'s `AssetTreeView` (no virtualization) — this panel
  *  only ever needs to pick ONE file, not browse a whole folder's contents,
- *  so a plain scrollable list is enough. Still reads through the same
- *  `flattenVisibleTree`/`toggleExpand` public surface. */
-function ReferencePicker({ selectedId, onSelect }: { selectedId: string | null; onSelect: (node: AssetTreeNode) => void }) {
-  const status = useAssetStore((s) => s.status);
-  const nodesById = useAssetStore((s) => s.nodesById);
-  const rootIds = useAssetStore((s) => s.rootIds);
+ *  so a plain scrollable list is enough. One section per connected root
+ *  (`AssetRoot`), since the reference file could live in any of them; each
+ *  section still reads through the same `flattenVisibleTree`/`toggleExpand`
+ *  public surface `AssetBrowserPanel.tsx` does, just unfiltered (see this
+ *  file's header comment on why `visibleIds` is not applied here). */
+function ReferencePicker({
+  selectedRootId,
+  selectedNodeId,
+  onSelect,
+}: {
+  selectedRootId: string | null;
+  selectedNodeId: string | null;
+  onSelect: (rootId: string, node: AssetTreeNode) => void;
+}) {
+  const roots = useAssetStore((s) => s.roots);
   const toggleExpand = useAssetStore((s) => s.toggleExpand);
 
-  const flat = useMemo(() => flattenVisibleTree(nodesById, rootIds), [nodesById, rootIds]);
+  const connectedRoots = roots.filter((r) => r.status === 'connected');
 
-  if (status !== 'connected') {
+  if (connectedRoots.length === 0) {
     return <p className="sg-critique__hint">Connect an asset folder (the Assets panel) to pick reference media.</p>;
-  }
-  if (flat.length === 0) {
-    return <p className="sg-critique__hint">The connected folder is empty.</p>;
   }
 
   return (
-    <ul className="sg-critique__tree" role="tree" aria-label="Reference media">
-      {flat.map((node) => (
-        <li key={node.id} style={{ paddingLeft: 4 + node.depth * 14 }}>
-          {node.kind === 'folder' ? (
-            <button type="button" className="sg-critique__disclosure" onClick={() => void toggleExpand(node.id)}>
-              {node.loadingChildren ? (
-                <Icon name="progress_activity" />
-              ) : (
-                <Icon name={node.expanded ? 'expand_more' : 'chevron_right'} />
-              )}{' '}
-              {node.name}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={
-                node.id === selectedId ? 'sg-critique__file sg-critique__file--selected' : 'sg-critique__file'
-              }
-              aria-pressed={node.id === selectedId}
-              onClick={() => onSelect(node)}
-            >
-              {node.name}
-            </button>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div className="sg-critique__tree-group">
+      {connectedRoots.map((root) => {
+        const flat = flattenVisibleTree(root.nodesById, root.rootIds);
+        return (
+          <div key={root.id} className="sg-critique__tree-section">
+            <p className="sg-critique__tree-heading">{root.rootName}</p>
+            {flat.length === 0 ? (
+              <p className="sg-critique__hint">This folder is empty.</p>
+            ) : (
+              <ul className="sg-critique__tree" role="tree" aria-label={`${root.rootName ?? 'Reference media'}`}>
+                {flat.map((node) => (
+                  <li key={node.id} style={{ paddingLeft: 4 + node.depth * 14 }}>
+                    {node.kind === 'folder' ? (
+                      <button
+                        type="button"
+                        className="sg-critique__disclosure"
+                        onClick={() => void toggleExpand(root.id, node.id)}
+                      >
+                        {node.loadingChildren ? (
+                          <Icon name="progress_activity" />
+                        ) : (
+                          <Icon name={node.expanded ? 'expand_more' : 'chevron_right'} />
+                        )}{' '}
+                        {node.name}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className={
+                          root.id === selectedRootId && node.id === selectedNodeId
+                            ? 'sg-critique__file sg-critique__file--selected'
+                            : 'sg-critique__file'
+                        }
+                        aria-pressed={root.id === selectedRootId && node.id === selectedNodeId}
+                        onClick={() => onSelect(root.id, node)}
+                      >
+                        {node.name}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -89,29 +122,32 @@ export function CritiquePanel() {
   const [settings] = useProjectSettings();
   const loadPreview = useAssetStore((s) => s.loadPreview);
   const releasePreview = useAssetStore((s) => s.releasePreview);
-  const nodesById = useAssetStore((s) => s.nodesById);
+  const roots = useAssetStore((s) => s.roots);
 
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedRef, setSelectedRef] = useState<{ rootId: string; nodeId: string } | null>(null);
   const [timestampsInput, setTimestampsInput] = useState('0, 1, 2');
   const [renderStill, setRenderStill] = useState<StillImage | null>(null);
   const [state, setState] = useState<RunState>({ kind: 'idle' });
 
   const critique = settings.referenceCritique;
   const hasApiKey = critique?.provider === 'api' && critique.apiKeyRef.trim().length > 0;
-  const selectedNode = selectedNodeId ? nodesById[selectedNodeId] : undefined;
+  const selectedNode = selectedRef
+    ? roots.find((r) => r.id === selectedRef.rootId)?.nodesById[selectedRef.nodeId]
+    : undefined;
 
   // Loads the newly-selected node's preview and releases the PREVIOUSLY
   // selected one on every change (and on unmount) — one effect owns the
   // whole acquire/release lifecycle, mirroring `AssetTreeView`'s treatment
   // of preview refcounting in `AssetBrowserPanel.tsx`.
   useEffect(() => {
-    if (!selectedNodeId) return;
-    void loadPreview(selectedNodeId);
-    return () => releasePreview(selectedNodeId);
-  }, [selectedNodeId, loadPreview, releasePreview]);
+    if (!selectedRef) return;
+    const { rootId, nodeId } = selectedRef;
+    void loadPreview(rootId, nodeId);
+    return () => releasePreview(rootId, nodeId);
+  }, [selectedRef, loadPreview, releasePreview]);
 
-  const handleSelect = useCallback((node: AssetTreeNode) => {
-    setSelectedNodeId(node.id);
+  const handleSelect = useCallback((rootId: string, node: AssetTreeNode) => {
+    setSelectedRef({ rootId, nodeId: node.id });
     setState({ kind: 'idle' });
   }, []);
 
@@ -183,7 +219,11 @@ export function CritiquePanel() {
 
       <section className="sg-critique__section">
         <h3 className="sg-critique__section-title">2. Reference</h3>
-        <ReferencePicker selectedId={selectedNodeId} onSelect={handleSelect} />
+        <ReferencePicker
+          selectedRootId={selectedRef?.rootId ?? null}
+          selectedNodeId={selectedRef?.nodeId ?? null}
+          onSelect={handleSelect}
+        />
         {selectedNode?.previewKind === 'image' && selectedNode.preview && (
           <img className="sg-critique__preview" src={selectedNode.preview} alt={selectedNode.name} />
         )}

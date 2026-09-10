@@ -1,0 +1,56 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShadeGraph — main content region (graph canvas + preview, dockable)
+   ───────────────────────────────────────────────────────────────────────────
+   Scoped purely via descendant selectors against the OTHER panes' existing
+   classes (`.sg-graph`, `.sg-viewer`) so neither `GraphCanvas.tsx` nor
+   `MainViewer.tsx` — nor their stylesheets — need to change: this file only
+   adds what changes when they're stacked in a column instead of sitting in
+   the old top-level row/footer split.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sg-main-region {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* `.sg-graph` already carries `flex: 1` for the old row layout; in this
+   column it sizes height the same way, it just also needs `min-height: 0`
+   so React Flow's `100%`-height canvas can shrink below its content size
+   instead of pushing `.sg-viewer` out of view. */
+.sg-main-region > .sg-graph {
+  min-height: 0;
+}
+
+/* `.sg-viewer` keeps its fixed `height: 120px` from `app.css`; pinning
+   `flex: none` here just guards against the column shrinking it. */
+.sg-main-region > .sg-viewer {
+  flex: none;
+}
+
+.sg-main-region__dock-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--sg-text);
+  background: var(--sg-panel);
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-radius);
+  cursor: pointer;
+}
+.sg-main-region__dock-toggle:hover {
+  border-color: var(--sg-accent);
+  color: #fff;
+}
+.sg-main-region__dock-toggle .sg-icon {
+  font-size: 16px;
+}

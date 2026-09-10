@@ -1,35 +1,54 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ShadeGraph — Inspector
 // ───────────────────────────────────────────────────────────────────────────
-// Three selection states:
+// Floating panel (see `inspector.css` / `../app.css`'s `.sg-inspector` rule)
+// anchored to the right edge of the main content region, sized to its own
+// content rather than a fixed-height column — it grows and shrinks with the
+// selection below.
+//
+// Selection states, in priority order:
+//   • multiple nodes selected → just a count; editing multiple nodes' params
+//                            at once is out of scope for Phase 1
 //   • one node selected   → its params, each rendered through `ParamControl`
 //                            and pairable with an "Expose" toggle — EXCEPT a
 //                            subgraph-instance node (special-cased, no
 //                            registry def, no `NodeParam`s of its own), which
 //                            shows its sockets (read live from the referenced
 //                            `SubGraph`) instead — see `SubGraphInstancePane`.
-//   • multiple selected   → just a count; editing multiple nodes' params at
-//                            once is out of scope for Phase 1
-//   • none selected       → document properties (`describeDocument`) plus the
-//                            Blackboard — UNLESS the canvas is currently
-//                            diving into a subgraph's own graph, in which
-//                            case its exposed interface (add/remove an
-//                            input/output) is shown instead, so it stays
-//                            editable somewhere — see `SubGraphInterfacePane`.
+//   • diving into a subgraph's own graph (canvas dive-in, no node selected)
+//                          → its exposed interface (add/remove an
+//                            input/output), so it stays editable somewhere —
+//                            see `SubGraphInterfacePane`. Takes priority over
+//                            a stale Layers-panel selection from before the
+//                            dive-in, since `editingTarget` is the more
+//                            explicit, more recent navigation.
+//   • multiple layers/groups selected (Layers panel) → just a count, same
+//                            treatment as multi-node
+//   • one layer OR group selected (Layers panel, `selectedLayerIds`) → the
+//                            "layer controls" section: blend/opacity/toggles/
+//                            mask/delete, plus Ungroup for a group — see
+//                            `LayerControlsPane`. Relocated here from
+//                            `LayerStack.tsx` (Phase 6 "Layers panel" task)
+//                            verbatim in behavior.
+//   • none of the above    → document properties (`describeDocument`) plus
+//                            the Blackboard.
 //
 // Contract (do not change, or App.tsx breaks):
 //   • props-free — read everything from `useEditorStore` directly
 //   • renders exactly one root element: the whole <aside className="sg-inspector">
-//     (it is grid column 3 of `.sg-body`)
+//     (floats over the main content region, positioned by `../app.css`)
 //   • named export `Inspector`
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState } from 'react';
 
-import type { NodeParam, ShaderDocument, SocketType, SubGraph } from '../../model/document';
+import type { EditingTarget } from '../store';
+import type { NodeParam, ShaderDocument, SocketType, StackNode, SubGraph } from '../../model/document';
+import { findStackNode, flattenLayers, isGroupNode, isLayerNode } from '../../model/layerTree';
 import { findSubGraph, isSubGraphInstanceNode } from '../../model/subgraph';
 import { nodes } from '../../nodes/registry';
-import { activeGraph, activeGraphKind, useEditorStore } from '../store';
+import { activeGraph, activeGraphKind, useEditorStore, type LayerPatch } from '../store';
+import { BLEND_MODES, BLEND_MODE_LABELS, isBlendMode } from '../layers/blendModes';
 import { collectExposedParams, describeDocument, type BlackboardEntry } from './blackboard';
 import { formatParamValue } from './paramValues';
 import { ParamControl } from './ParamControl';
@@ -40,6 +59,7 @@ const titleOf = (type: string) => nodes.get(type)?.title;
 export function Inspector() {
   const doc = useEditorStore((s) => s.doc);
   const selectedNodeIds = useEditorStore((s) => s.selectedNodeIds);
+  const selectedLayerIds = useEditorStore((s) => s.selectedLayerIds);
   const setParamExposed = useEditorStore((s) => s.setParamExposed);
   const editingTarget = useEditorStore((s) => s.editingTarget);
   const graph = activeGraph(doc, editingTarget);
@@ -50,6 +70,14 @@ export function Inspector() {
   const editingSubGraphId =
     editingTarget.kind === 'subgraph' && activeGraphKind(doc, editingTarget) === 'subgraph'
       ? editingTarget.subGraphId
+      : undefined;
+
+  // Only consulted once every node/subgraph-diving state above has fallen
+  // through — see the priority list in the header comment.
+  const noNodeSelected = selectedNodeIds.length === 0;
+  const stackNode =
+    noNodeSelected && !editingSubGraphId && selectedLayerIds.length === 1
+      ? findStackNode(doc.layerStack.layers, selectedLayerIds[0])
       : undefined;
 
   return (
@@ -92,10 +120,218 @@ export function Inspector() {
         </>
       ) : editingSubGraphId ? (
         <SubGraphInterfacePane subGraphId={editingSubGraphId} />
+      ) : noNodeSelected && selectedLayerIds.length > 1 ? (
+        <p className="sg-pane__empty">{selectedLayerIds.length} layers selected.</p>
+      ) : stackNode ? (
+        <LayerControlsPane stackNode={stackNode} doc={doc} editingTarget={editingTarget} />
       ) : (
         <DocumentPane doc={doc} />
       )}
     </aside>
+  );
+}
+
+/** Layer-controls section for the Layers panel's current single selection —
+ *  a leaf `ShaderLayer` or a `LayerGroup`, both handled the same way except
+ *  where noted (mask controls, Ungroup). Relocated verbatim (same store
+ *  actions, same behavior) from `LayerStack.tsx`'s old inline per-row
+ *  controls — see that file's Phase 6 "Layers panel" rewrite, which removes
+ *  them there. */
+function LayerControlsPane({
+  stackNode,
+  doc,
+  editingTarget,
+}: {
+  stackNode: StackNode;
+  doc: ShaderDocument;
+  editingTarget: EditingTarget;
+}) {
+  const setLayerProp = useEditorStore((s) => s.setLayerProp);
+  const removeLayer = useEditorStore((s) => s.removeLayer);
+  const ungroupLayer = useEditorStore((s) => s.ungroupLayer);
+  const addMaskToLayer = useEditorStore((s) => s.addMaskToLayer);
+  const removeMaskFromLayer = useEditorStore((s) => s.removeMaskFromLayer);
+  const enterMaskEditing = useEditorStore((s) => s.enterMaskEditing);
+  const exitMaskEditing = useEditorStore((s) => s.exitMaskEditing);
+
+  const isGroup = isGroupNode(stackNode);
+  const isLeaf = isLayerNode(stackNode);
+  // Same "would this empty the document of layers?" check `removeLayer`
+  // itself enforces — reimplemented here only to disable the button up
+  // front, matching the old `LayerStack.tsx` row's UX; the store's own
+  // rejection (surfaced via `lastError`/`NoticeToast`) is still the real
+  // guard, not this.
+  const totalLeaves = flattenLayers(doc.layerStack.layers).length;
+  const removedLeaves = isGroupNode(stackNode) ? flattenLayers(stackNode.children).length : 1;
+  const onlyLayer = totalLeaves - removedLeaves < 1;
+
+  const hasMask = !!stackNode.maskGraph;
+  const editingMask = editingTarget.kind === 'mask' && editingTarget.layerId === stackNode.id;
+
+  const patch = (p: LayerPatch) => setLayerProp(stackNode.id, p);
+
+  return (
+    <div className="sg-inspector__layerctl">
+      <div className="sg-inspector__head">
+        <strong>{stackNode.name}</strong>
+        <code>{isGroup ? 'Group' : 'Layer'}</code>
+      </div>
+
+      <div className="sg-layerctl__row">
+        <LayerToggle
+          label="out"
+          on={stackNode.enabled}
+          title="Contributes to the compiled output"
+          name={stackNode.name}
+          onToggle={() => patch({ enabled: !stackNode.enabled })}
+        />
+        <LayerToggle
+          label="prev"
+          on={stackNode.visible}
+          title="Drawn in the editor preview, even when not in the output"
+          name={stackNode.name}
+          onToggle={() => patch({ visible: !stackNode.visible })}
+        />
+        <LayerToggle
+          label="solo"
+          on={stackNode.soloed ?? false}
+          title="Solo: while any sibling is soloed, only soloed siblings composite"
+          name={stackNode.name}
+          onToggle={() => patch({ soloed: !stackNode.soloed })}
+        />
+
+        {isLeaf ? (
+          <>
+            <button
+              type="button"
+              className="sg-layerctl__mask"
+              data-on={hasMask}
+              data-editing={editingMask || undefined}
+              aria-pressed={editingMask}
+              aria-label={
+                !hasMask
+                  ? `Add a mask to ${stackNode.name}`
+                  : editingMask
+                    ? `Stop editing ${stackNode.name}'s mask`
+                    : `Edit ${stackNode.name}'s mask`
+              }
+              title={
+                !hasMask
+                  ? 'Add a mask (multiplies a grayscale graph result into this layer per-pixel)'
+                  : editingMask
+                    ? "Back to this layer's main graph"
+                    : "Edit this layer's mask graph"
+              }
+              onClick={() => {
+                if (!hasMask) addMaskToLayer(stackNode.id);
+                else if (editingMask) exitMaskEditing();
+                else enterMaskEditing(stackNode.id);
+              }}
+            >
+              {hasMask ? 'mask' : '+ mask'}
+            </button>
+            {hasMask ? (
+              <button
+                type="button"
+                className="sg-layerctl__maskRemove"
+                onClick={() => removeMaskFromLayer(stackNode.id)}
+                aria-label={`Remove ${stackNode.name}'s mask`}
+                title="Remove this layer's mask"
+              >
+                ×
+              </button>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+
+      <div className="sg-layerctl__row sg-layerctl__row--mix">
+        <label className="sg-layerctl__field">
+          <span className="sg-layerctl__fieldLabel">Blend</span>
+          <select
+            className="sg-layerctl__select"
+            value={stackNode.blend}
+            onChange={(e) => {
+              if (isBlendMode(e.target.value)) patch({ blend: e.target.value });
+            }}
+            aria-label={`Blend mode for ${stackNode.name}`}
+          >
+            {BLEND_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {BLEND_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="sg-layerctl__field sg-layerctl__field--opacity">
+          <span className="sg-layerctl__fieldLabel">Opacity</span>
+          <input
+            className="sg-layerctl__slider"
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round(stackNode.opacity * 100)}
+            onChange={(e) => patch({ opacity: Number(e.target.value) / 100 })}
+            aria-label={`Opacity for ${stackNode.name}`}
+          />
+          <output className="sg-layerctl__pct">{Math.round(stackNode.opacity * 100)}%</output>
+        </label>
+      </div>
+
+      <div className="sg-layerctl__actions">
+        {isGroup ? (
+          <button
+            type="button"
+            className="sg-btn sg-btn--mini"
+            onClick={() => ungroupLayer(stackNode.id)}
+            title="Ungroup: splice this group's children back into its parent"
+          >
+            Ungroup
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="sg-layerctl__delete"
+          onClick={() => removeLayer(stackNode.id)}
+          disabled={onlyLayer}
+          aria-label={`Delete ${stackNode.name}`}
+          title={onlyLayer ? 'A document needs at least one layer' : `Delete ${stackNode.name}`}
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Small pressed-state toggle, same look as the old `LayerStack.tsx` one
+//    (`.sg-layerctl__toggle` in `inspector.css` mirrors `.sg-layers__toggle`
+//    in `../layers/layers.css`) — duplicated rather than imported cross-pane,
+//    since the Layers panel task owns (and is actively rewriting) that file.
+
+interface LayerToggleProps {
+  label: string;
+  name: string;
+  title: string;
+  on: boolean;
+  onToggle: () => void;
+}
+
+function LayerToggle({ label, name, title, on, onToggle }: LayerToggleProps) {
+  return (
+    <button
+      type="button"
+      className="sg-layerctl__toggle"
+      data-on={on}
+      aria-pressed={on}
+      aria-label={`${title} — ${name}`}
+      title={title}
+      onClick={onToggle}
+    >
+      {label}
+    </button>
   );
 }
 

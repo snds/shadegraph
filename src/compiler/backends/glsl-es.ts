@@ -24,7 +24,7 @@ import type {
   StackNode,
 } from '../../model/document';
 import { sanitizeIdent } from '../../model/ids';
-import { findLayer, findLayerOwningNode } from '../../model/layerTree';
+import { findLayerOwningNode, findStackNode, isGroupNode } from '../../model/layerTree';
 import { nodes as defaultRegistry, type NodeRegistry } from '../../nodes/registry';
 import {
   backends,
@@ -522,8 +522,14 @@ function compileDocument(
   }
 
   if (opts?.previewLayerId) {
-    const layer = findLayer(doc.layerStack.layers, opts.previewLayerId);
-    if (!layer) {
+    // Resolves EITHER a leaf layer or a `LayerGroup` (`findStackNode`, not
+    // the leaf-only `findLayer`) — isolating a group means folding its own
+    // `children` in isolation (the exact recursive fold `foldStack` already
+    // does for a group nested inside a real composite, just rooted here
+    // instead of at the document), never a second preview mechanism. This is
+    // what a Layers-panel row's thumbnail (leaf OR group) compiles through.
+    const node = findStackNode(doc.layerStack.layers, opts.previewLayerId);
+    if (!node) {
       return {
         target: 'glsl-es',
         vertex: VERTEX_SHADER,
@@ -537,10 +543,28 @@ function compileDocument(
         ],
       };
     }
+    if (isGroupNode(node)) {
+      const handle = createEmitSink();
+      const relativeSourceMap: Array<{ line: number; nodeId: string }> = [];
+      const compositeVar = foldStack(node.children, handle, registry, doc.subGraphs, relativeSourceMap);
+      handle.sink.emit(`gl_FragColor = vec4(${compositeVar}, 1.0);`);
+      const uniformDecls = handle.uniforms.map((u) => `uniform ${typeName(u.type)} ${u.name};`);
+      const fragment = assembleFragment(uniformDecls, handle.body, handle.preludes);
+      const offset = headerLineCount(uniformDecls, handle.preludes);
+      const sourceMap = relativeSourceMap.map(({ line, nodeId }) => ({ line: offset + line + 1, nodeId }));
+      return {
+        target: 'glsl-es',
+        vertex: VERTEX_SHADER,
+        fragment,
+        uniforms: handle.uniforms,
+        diagnostics: handle.diagnostics,
+        sourceMap,
+      };
+    }
     // Isolated single-layer preview bypasses compositing entirely, per
     // `CompileOptions.previewLayerId`'s contract ("preview only this layer").
     const { previewLayerId: _drop, ...rest } = opts;
-    return compileGraph(layer.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
+    return compileGraph(node.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
   }
 
   const handle = createEmitSink();

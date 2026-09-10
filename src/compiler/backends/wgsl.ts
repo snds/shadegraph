@@ -30,7 +30,7 @@ import type {
   SocketType,
   StackNode,
 } from '../../model/document';
-import { findLayer, findLayerOwningNode } from '../../model/layerTree';
+import { findLayerOwningNode, findStackNode, isGroupNode } from '../../model/layerTree';
 import { nodes as defaultRegistry, type NodeRegistry } from '../../nodes/registry';
 import {
   backends,
@@ -452,8 +452,14 @@ function compileDocument(
   }
 
   if (opts?.previewLayerId) {
-    const layer = findLayer(doc.layerStack.layers, opts.previewLayerId);
-    if (!layer) {
+    // Resolves EITHER a leaf layer or a `LayerGroup` (`findStackNode`, not
+    // the leaf-only `findLayer`) — isolating a group means folding its own
+    // `children` in isolation (the exact recursive fold `foldStack` already
+    // does for a group nested inside a real composite, just rooted here
+    // instead of at the document), never a second preview mechanism. This is
+    // what a Layers-panel row's thumbnail (leaf OR group) compiles through.
+    const node = findStackNode(doc.layerStack.layers, opts.previewLayerId);
+    if (!node) {
       return {
         target: 'wgsl',
         module: '',
@@ -466,8 +472,24 @@ function compileDocument(
         ],
       };
     }
+    if (isGroupNode(node)) {
+      const handle = createEmitSink();
+      const relativeSourceMap: Array<{ line: number; nodeId: string }> = [];
+      const compositeVar = foldStack(node.children, handle, registry, doc.subGraphs, relativeSourceMap);
+      handle.sink.emit(`return vec4<f32>(${compositeVar}, 1.0);`);
+      const module = assembleModule(handle.uniforms, handle.body);
+      const offset = headerLineCount();
+      const sourceMap = relativeSourceMap.map(({ line, nodeId }) => ({ line: offset + line + 1, nodeId }));
+      return {
+        target: 'wgsl',
+        module,
+        uniforms: handle.uniforms,
+        diagnostics: handle.diagnostics,
+        sourceMap,
+      };
+    }
     const { previewLayerId: _drop, ...rest } = opts;
-    return compileGraph(layer.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
+    return compileGraph(node.graph, { ...rest, subGraphs: doc.subGraphs }, registry);
   }
 
   const handle = createEmitSink();
