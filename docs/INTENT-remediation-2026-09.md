@@ -63,7 +63,7 @@ Run `python3 09-tools/intent-run.py init --recon --repo <repo> --spec <this file
 |---|---|---|---|---|---|---|---|---|---|---|
 | F-001 | High | OPEN | recon | The WGSL backend never composites a layer's `maskGraph`, and `output.mask` / `chunk.raw` have only a `glsl-es` emitter, yet WGSL is selectable in the toolbar; a masked document renders differently under WGSL than under GLSL ES | Same document renders the same under both shipped targets, or WGSL emits an error diagnostic naming the unsupported feature | src/compiler/backends/wgsl.ts:379; src/nodes/definitions/mask.ts:25; src/ui/DocToolbar.tsx:163 | C-001 | - | - | medium |
 | F-002 | Medium | OPEN | recon | README and AGENTS.md say the document compiles to Three TSL; `TargetLang` also lists `glsl3` and `tsl`, but only `glsl-es` and `wgsl` backends exist | Docs name shipped targets vs planned ones; the target type only admits registered backends (or asking for an unregistered one fails with a clear error) | README.md:6; README.md:26; AGENTS.md:7; src/compiler/backend.ts:21 | C-002 | - | - | low |
-| F-003 | Medium | OPEN | recon | No CI and no lint config; typecheck + 788 tests only run by hand, and this repo commits straight to main | A push to main runs `pnpm typecheck` and `pnpm test` automatically | recon card: CI none found, lint/format config none found | C-003 | - | - | low |
+| F-003 | Medium | RESOLVED | recon | No CI and no lint config; typecheck + 788 tests only run by hand, and this repo commits straight to main | A push to main runs `pnpm typecheck` and `pnpm test` automatically | recon card: CI none found, lint/format config none found | C-010 | ea2c018 | - | low |
 | F-004 | Medium | OPEN | recon | `chunk.raw` nodes store raw GLSL text in `ShaderNode.chunkSource.text`, while AGENTS.md forbids shading-language source in the document model; the Phase 5 exception is not written into the contract | The contract and the model agree: either AGENTS.md names the imported-chunk passthrough as the one sanctioned exception, or the source moves out of the document | src/model/document.ts:135; AGENTS.md "Do not" list | C-004 | - | - | low |
 | F-005 | Low | OPEN | recon | Reference critique falls back to model `claude-sonnet-4-5`, a superseded model id | The fallback is a current model id, kept in one constant | src/critique/anthropicClient.ts:38 | C-005 | - | - | low |
 | F-006 | Low | DEFERRED | recon | `src/ui/store.ts` is 1214 lines (repo p99 751) and its test file 1133; one zustand store owns every editor action | Store split by concern (document, selection, viewer, assets) | recon card long-files hazard; src/ui/store.ts | C-006 | Tests cover it well and Phase 6 is still landing UI; splitting now would collide with active shell work | on: Phase 6 closes or store.ts passes 1500 lines | low |
@@ -82,6 +82,7 @@ Run `python3 09-tools/intent-run.py init --recon --repo <repo> --spec <this file
 - C-007: judgment: `pnpm build` emits no chunk-size warning
 - C-008: judgment: no API key is readable from page storage on a hosted origin
 - C-009: judgment: thumbnails compile with the main viewer's target
+- C-010: measure: test -f .github/workflows/ci.yml && pnpm typecheck && pnpm test
 
 ## Preserve
 
