@@ -35,7 +35,9 @@ import type { StillImage } from './types';
 
 export const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-const DEFAULT_MODEL = 'claude-sonnet-4-5';
+// Fallback when `ProjectSettings.referenceCritique.model` is blank. Keep this
+// the only place a Claude model id is hard-coded; bump it when Sonnet moves on.
+export const DEFAULT_MODEL = 'claude-sonnet-5';
 const MAX_TOKENS = 1024;
 
 interface AnthropicTextBlock {
