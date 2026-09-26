@@ -37,7 +37,7 @@ describe('runCritique', () => {
   });
 
   it('calls the injected provider with the given config/render/references/prompt and parses its reply', async () => {
-    const apiConfig: ReferenceCritiqueApiConfig = { provider: 'api', apiKeyRef: secretApiKey, model: 'claude-sonnet-4-5' };
+    const apiConfig: ReferenceCritiqueApiConfig = { provider: 'api', apiKeyRef: secretApiKey, model: 'claude-sonnet-5' };
     const call = vi.fn(async () => '```json\n{"verdict": "pass", "reasoning": "Matches well."}\n```');
 
     const result = await runCritique({ config: apiConfig, render, references: [reference], prompt: 'custom rubric' }, { call });

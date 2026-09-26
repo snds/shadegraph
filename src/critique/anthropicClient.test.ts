@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ReferenceCritiqueApiConfig } from '../model/settings';
 import { extractVideoStills, type OffscreenCanvasLike, type OffscreenVideoLike, type VideoFrameExtractorDeps } from './videoFrames';
-import { ANTHROPIC_MESSAGES_URL, buildAnthropicRequest, callAnthropic } from './anthropicClient';
+import { ANTHROPIC_MESSAGES_URL, DEFAULT_MODEL, buildAnthropicRequest, callAnthropic } from './anthropicClient';
 import { CritiqueError } from './errors';
 import type { StillImage } from './types';
 
-const config: ReferenceCritiqueApiConfig = { provider: 'api', apiKeyRef: 'sk-ant-test-key-do-not-log', model: 'claude-sonnet-4-5' };
+const config: ReferenceCritiqueApiConfig = { provider: 'api', apiKeyRef: 'sk-ant-test-key-do-not-log', model: 'claude-opus-5' };
 const render: StillImage = { dataUrl: 'data:image/png;base64,UkVOREVSREFUQQ==', label: 'Current render' };
 const reference: StillImage = { dataUrl: 'data:image/png;base64,UkVGRVJFTkNFREFUQQ==', label: 'ref.png' };
 
@@ -26,12 +26,15 @@ describe('buildAnthropicRequest', () => {
 
   it('uses the configured model, falling back to a default when unset', () => {
     const withModel = parseBody(buildAnthropicRequest(config, render, [], 'p').init);
-    expect(withModel.model).toBe('claude-sonnet-4-5');
+    expect(withModel.model).toBe('claude-opus-5');
 
     const noModelConfig: ReferenceCritiqueApiConfig = { provider: 'api', apiKeyRef: 'k' };
     const withoutModel = parseBody(buildAnthropicRequest(noModelConfig, render, [], 'p').init);
-    expect(typeof withoutModel.model).toBe('string');
-    expect((withoutModel.model as string).length).toBeGreaterThan(0);
+    expect(withoutModel.model).toBe(DEFAULT_MODEL);
+  });
+
+  it('pins the fallback model to a current Claude model id', () => {
+    expect(DEFAULT_MODEL).toBe('claude-sonnet-5');
   });
 
   it('includes the render and every reference as base64 image blocks, plus the prompt text', () => {
