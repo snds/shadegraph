@@ -65,7 +65,7 @@ Run `python3 09-tools/intent-run.py init --recon --repo <repo> --spec <this file
 | F-002 | Medium | OPEN | recon | README and AGENTS.md say the document compiles to Three TSL; `TargetLang` also lists `glsl3` and `tsl`, but only `glsl-es` and `wgsl` backends exist | Docs name shipped targets vs planned ones; the target type only admits registered backends (or asking for an unregistered one fails with a clear error) | README.md:6; README.md:26; AGENTS.md:7; src/compiler/backend.ts:21 | C-002 | - | - | low |
 | F-003 | Medium | RESOLVED | recon | No CI and no lint config; typecheck + 788 tests only run by hand, and this repo commits straight to main | A push to main runs `pnpm typecheck` and `pnpm test` automatically | recon card: CI none found, lint/format config none found | C-010 | ea2c018 | - | low |
 | F-004 | Medium | OPEN | recon | `chunk.raw` nodes store raw GLSL text in `ShaderNode.chunkSource.text`, while AGENTS.md forbids shading-language source in the document model; the Phase 5 exception is not written into the contract | The contract and the model agree: either AGENTS.md names the imported-chunk passthrough as the one sanctioned exception, or the source moves out of the document | src/model/document.ts:135; AGENTS.md "Do not" list | C-004 | - | - | low |
-| F-005 | Low | OPEN | recon | Reference critique falls back to model `claude-sonnet-4-5`, a superseded model id | The fallback is a current model id, kept in one constant | src/critique/anthropicClient.ts:38 | C-005 | - | - | low |
+| F-005 | Low | RESOLVED | recon | Reference critique falls back to model `claude-sonnet-4-5`, a superseded model id | The fallback is a current model id, kept in one constant | src/critique/anthropicClient.ts:38 | C-011 | a74123f | - | low |
 | F-006 | Low | DEFERRED | recon | `src/ui/store.ts` is 1214 lines (repo p99 751) and its test file 1133; one zustand store owns every editor action | Store split by concern (document, selection, viewer, assets) | recon card long-files hazard; src/ui/store.ts | C-006 | Tests cover it well and Phase 6 is still landing UI; splitting now would collide with active shell work | on: Phase 6 closes or store.ts passes 1500 lines | low |
 | F-007 | Low | DEFERRED | recon | Production build is one 1.49 MB JS chunk (three + webgpu + app); Vite warns | Code-split three/webgpu and the critique panel behind dynamic imports | `pnpm build` output 2026-09-26 | C-007 | Local dev tool with no hosted deploy; load time is not yet a user cost | on: first hosted deploy | low |
 | F-008 | Low | DEFERRED | recon | The Anthropic API key is stored in plain text in localStorage and sent from the browser with `anthropic-dangerous-direct-browser-access` | Key lives in a server-side proxy or an OS keychain bridge, never in page storage | src/model/settings.ts:17; src/critique/anthropicClient.ts:94 | C-008 | Documented, deliberate Phase 4 choice for a single-user local tool on localhost; no third-party scripts load on the page | on: ShadeGraph served from any non-localhost origin | medium |
@@ -83,6 +83,7 @@ Run `python3 09-tools/intent-run.py init --recon --repo <repo> --spec <this file
 - C-008: judgment: no API key is readable from page storage on a hosted origin
 - C-009: judgment: thumbnails compile with the main viewer's target
 - C-010: measure: test -f .github/workflows/ci.yml && pnpm typecheck && pnpm test
+- C-011: measure: ! grep -rn "claude-sonnet-4-5" src && pnpm vitest run src/critique
 
 ## Preserve
 
@@ -188,3 +189,4 @@ Run `python3 09-tools/intent-run.py init --recon --repo <repo> --spec <this file
 ## Changelog
 
 - 2026-09-26 — created from recon at ffcdd90; 9 findings (1 High, 3 Medium, 5 Low; 4 deferred), 5 packets
+- 2026-09-26 — F-005 resolved by T5 (a74123f). Scope check reported one write outside T5's list: src/critique/runCritique.test.ts, a one-string test fixture change from `claude-sonnet-4-5` to `claude-sonnet-5`, needed because the acceptance grep covers all of src. Accepted as a one-off; T5's writes stay as specified.
