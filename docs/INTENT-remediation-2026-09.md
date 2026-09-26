@@ -6,7 +6,7 @@ created: 2026-09-26
 profile: personal-solo
 lifecycle: define
 northstar: recon
-approval:
+approval: approved 2026-09-26 by Sean
 blocked_by:
 ---
 
